@@ -22,43 +22,54 @@ pub fn init() {
 
 /// Parse and execute commands typed by Andre
 fn interpret_command(command: &str) {
-    match command {
-        "aide" | "help" => {
-            println!("\nAvailable commands: help, info, stats, clear, neofetch");
-        }
-        "info" => {
-            println!("\nJC-OS v0.2 - Sovereign Rust Kernel");
-            println!("Architecture: x86_64 Bare Metal");
-            println!("Mode: Memory Protection & Dynamic Allocation");
-        }
-        "stats" => {
-            println!("\n--- JC-OS MEMORY STATS ---");
-            println!("Heap Start : 0x{:X}", crate::allocator::heap_start());
-            println!("Heap Size  : {} KB", crate::allocator::heap_size() / 1024);
-            println!("Status     : DYNAMIC ALLOCATION OK");
-            println!("---------------------------");
-        }
-        "neofetch" => {
-            println!("\n    _/_/_/    _/_/_/  ");
-            println!("       _/  _/         JC-OS v0.2");
-            println!("      _/  _/          Kernel: Rust 64-bit");
-            println!("_/_/_/      _/_/_/    Sovereignty: 100%");
-            println!("\nSystem ready for critical computations.");
-        }
-        "clear" => {
-            vga_buffer::clear_screen();
-            print!(">>> "); // Immediately show the prompt again
-            return;
-        }
-        _ => {
-            if !command.is_empty() {
-                println!("\nUnknown command: {}", command);
-            }
-        }
+    let command = command.trim();
+    if command.is_empty() { 
+        print!("\n>>> "); // Just go to next line if empty
+        return; 
     }
+
+    // Force a new line before printing result
+    println!(""); 
+
+    let mut parts = command.splitn(2, ' ');
+    let cmd = parts.next().unwrap_or("");
+    let args = parts.next().unwrap_or("");
+
+    match cmd {
+        "help" => {
+            println!("Available commands: help, info, stats, echo, whoami, clear, neofetch");
+        },
+        "info" => {
+            println!("JC-OS v0.2 - Andre Edition");
+            println!("Status: Stable");
+        },
+        "echo" => {
+            println!("{}", args);
+        },
+        "whoami" => {
+            println!("Andre"); // Directly your name!
+        },
+        "stats" => {
+            println!("--- MEMORY STATS ---");
+            println!("Heap Start : 0x444444440000");
+            println!("Heap Size  : 100 KB");
+        },
+        "neofetch" => {
+            println!("  _/_/   JC-OS v0.2");
+            println!(" _/      Kernel: Rust 64-bit");
+            println!("_/_/_/   User: Andre");
+        },
+        "clear" => {
+            crate::vga_buffer::clear_screen();
+        },
+        _ => {
+            println!("Unknown command: {}", cmd);
+        },
+    }
+    
+    // Always print the prompt on a NEW line at the end
     print!("\n>>> ");
 }
-
 pub fn add_scancode(scancode: u8) {
     match scancode {
         0xFA | 0xFE | 0xAA | 0x00 => return, // Ignore ACK, NACK, Self-test, and 0
