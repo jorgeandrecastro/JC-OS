@@ -1,0 +1,20 @@
+# Cargo
+/target/
+**/*.rs.bk
+
+# Bootable images
+*.bin
+*.iso
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs / output
+*.log
+*.out

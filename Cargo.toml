@@ -1,0 +1,21 @@
+[package]
+name = "jc-os"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0" 
+
+[dependencies]
+bootloader = "0.9.23"
+volatile = "0.2.6"
+spin = "0.9"
+x86_64 = "0.14"
+uart_16550 = "0.2.0"
+pic8259 = "0.10.1"
+pc-keyboard = "0.7.0"
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
