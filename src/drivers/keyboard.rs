@@ -12,7 +12,6 @@ lazy_static! {
             HandleControl::Ignore
         ));
 
-    // Dynamic buffer to store user commands
     static ref COMMAND_BUFFER: Mutex<String> = Mutex::new(String::with_capacity(80));
 }
 
@@ -20,15 +19,13 @@ pub fn init() {
     serial_println!("[KEYBOARD] Driver initialized (AZERTY layout, Set2)");
 }
 
-/// Parse and execute commands typed by Andre
 fn interpret_command(command: &str) {
     let command = command.trim();
     if command.is_empty() { 
-        print!("\n>>> "); // Just go to next line if empty
+        print!("\n>>> ");
         return; 
     }
 
-    // Force a new line before printing result
     println!(""); 
 
     let mut parts = command.splitn(2, ' ');
@@ -37,18 +34,49 @@ fn interpret_command(command: &str) {
 
     match cmd {
         "help" => {
-            println!("Available commands: help, info, stats, echo, whoami, clear, neofetch");
+            println!("Commands: help, info, stats, echo, whoami, ls, touch, cat, clear, neofetch");
         },
         "info" => {
             println!("JC-OS v0.2 - Andre Edition");
             println!("Status: Stable");
         },
+        "whoami" => {
+            println!("Andre");
+        },
         "echo" => {
             println!("{}", args);
         },
-        "whoami" => {
-            println!("Andre"); // Directly your name!
+        // --- NOUVELLES COMMANDES DE SYSTÈME DE FICHIERS ---
+        "ls" => {
+            let fs = crate::fs::FS.lock();
+            let files = fs.list_files();
+            if files.is_empty() {
+                println!("No files found.");
+            } else {
+                for f in files {
+                    println!("- {}", f);
+                }
+            }
         },
+        "touch" => {
+            let mut arg_parts = args.splitn(2, ' ');
+            let name = arg_parts.next().unwrap_or("");
+            let content = arg_parts.next().unwrap_or("");
+            if name.is_empty() {
+                println!("Usage: touch <filename> <content>");
+            } else {
+                crate::fs::FS.lock().write_file(name, content);
+                println!("File '{}' saved to RAM.", name);
+            }
+        },
+        "cat" => {
+            if let Some(content) = crate::fs::FS.lock().read_file(args.trim()) {
+                println!("{}", content);
+            } else {
+                println!("Error: File '{}' not found.", args.trim());
+            }
+        },
+        // ------------------------------------------------
         "stats" => {
             println!("--- MEMORY STATS ---");
             println!("Heap Start : 0x444444440000");
@@ -67,12 +95,12 @@ fn interpret_command(command: &str) {
         },
     }
     
-    // Always print the prompt on a NEW line at the end
     print!("\n>>> ");
 }
+
 pub fn add_scancode(scancode: u8) {
     match scancode {
-        0xFA | 0xFE | 0xAA | 0x00 => return, // Ignore ACK, NACK, Self-test, and 0
+        0xFA | 0xFE | 0xAA | 0x00 => return,
         _ => {} 
     }
     
@@ -82,7 +110,6 @@ pub fn add_scancode(scancode: u8) {
         let state = key_event.state;
         let code = key_event.code;
 
-        // Handle control keys (Down only)
         if state == KeyState::Down {
             match code {
                 KeyCode::Backspace => {
@@ -103,7 +130,6 @@ pub fn add_scancode(scancode: u8) {
             }
         }
 
-        // Decode Unicode characters
         if let Some(decoded) = keyboard.process_keyevent(key_event) {
             if state == KeyState::Down {
                 match decoded {
@@ -112,19 +138,13 @@ pub fn add_scancode(scancode: u8) {
                             let mut cmd = COMMAND_BUFFER.lock();
                             interpret_command(&cmd);
                             cmd.clear();
-                        } else if ch != '\u{0008}' { // Avoid pushing backspace
+                        } else {
                             COMMAND_BUFFER.lock().push(ch);
                             vga_buffer::print_char(ch);
                             serial_print!("{}", ch);
                         }
                     }
-                    DecodedKey::RawKey(key) => {
-                        if key == KeyCode::Return || key == KeyCode::NumpadEnter {
-                            let mut cmd = COMMAND_BUFFER.lock();
-                            interpret_command(&cmd);
-                            cmd.clear();
-                        }
-                    }
+                    _ => {}
                 }
             }
         }
