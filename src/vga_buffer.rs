@@ -86,15 +86,16 @@ impl Writer {
             self.row_position += 1;
         } else {
             // Scroll : on décale aussi les longueurs de lignes
-            for row in 1..BUFFER_HEIGHT {
-                for col in 0..BUFFER_WIDTH {
-                    let character = self.buffer.chars[row][col].read();
-                    self.buffer.chars[row - 1][col].write(character);
-                }
-                self.line_lengths[row - 1] = self.line_lengths[row];
-            }
-            self.clear_row(BUFFER_HEIGHT - 1);
-            self.line_lengths[BUFFER_HEIGHT - 1] = 0;
+            // Dans new_line :
+// On commence à row 2 pour copier vers row 1, laissant row 0 intacte
+for row in 2..BUFFER_HEIGHT { 
+    for col in 0..BUFFER_WIDTH {
+        let character = self.buffer.chars[row][col].read();
+        self.buffer.chars[row - 1][col].write(character);
+    }
+    self.line_lengths[row - 1] = self.line_lengths[row];
+}
+self.clear_row(BUFFER_HEIGHT - 1);
         }
         self.column_position = 0;
         self.update_cursor();
@@ -171,6 +172,40 @@ impl Writer {
         self.update_cursor();
     }
 }
+
+// Nouvelle fonctionnalité : affichage de l'horloge en haut à droite
+impl Writer {
+    pub fn write_clock(&mut self, hours: u8, minutes: u8, seconds: u8) {
+        let row = 0;
+        let col = 71; // Position tout en haut à droite
+
+        
+        // Formatage "00:00:00" sans allocation (No-Std style)
+        self.write_digit_at(hours / 10, row, col);
+        self.write_digit_at(hours % 10, row, col + 1);
+        self.write_byte_at(b':', row, col + 2);
+        self.write_digit_at(minutes / 10, row, col + 3);
+        self.write_digit_at(minutes % 10, row, col + 4);
+        self.write_byte_at(b':', row, col + 5);
+        self.write_digit_at(seconds / 10, row, col + 6);
+        self.write_digit_at(seconds % 10, row, col + 7);
+    }
+    // À ajouter dans impl Writer
+fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
+    let color_code = self.color_code;
+    self.buffer.chars[row][col].write(ScreenChar {
+        ascii_character: byte,
+        color_code,
+    });
+}
+
+    fn write_digit_at(&mut self, digit: u8, row: usize, col: usize) {
+        self.write_byte_at(digit + b'0', row, col);
+
+    }
+    
+}
+
 
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {

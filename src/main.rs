@@ -63,6 +63,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Tâche 1 : Un compteur qui tourne en fond (exemple)
     executor.spawn(Task::new(example_task())); // Tâche 1
     executor.spawn(Task::new(message_task())); // Tâche 2
+    executor.spawn(Task::new(clock_task()));   // Tâche 3 : Horloge
 
    
     
@@ -135,6 +136,24 @@ async fn message_task() {
         
         for _ in 0..500000 { core::hint::spin_loop(); }
         serial_println!("Je suis la tache B");
+        crate::task::yield_now().await;
+    }
+}
+// Tâche pour afficher l'horloge en temps réel
+async fn clock_task() {
+    let mut last_second = 255; // Valeur impossible pour forcer le premier affichage
+
+    loop {
+        let time = crate::drivers::rtc::get_time();
+        
+        // On ne rafraîchit l'écran que si la seconde a changé
+        if time.seconds != last_second {
+            let mut writer = crate::vga_buffer::WRITER.lock();
+            writer.write_clock(time.hours, time.minutes, time.seconds);
+            last_second = time.seconds;
+        }
+
+        // On rend la main. L'Executor repassera nous voir très vite.
         crate::task::yield_now().await;
     }
 }

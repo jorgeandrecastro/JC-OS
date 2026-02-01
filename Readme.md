@@ -15,6 +15,7 @@ This project demonstrates the fundamentals of OS creation:
 - Virtual memory with paging
 - Dynamic memory allocation (heap)
 - RAM-based file system with interactive shell
+- Async/await task scheduling with executor
 
 ## ✨ Implemented Features
 
@@ -45,6 +46,14 @@ This project demonstrates the fundamentals of OS creation:
 - **File management commands**: touch, cat, rm, edit
 - **System information**: info, stats, whoami, neofetch
 - **Utility commands**: help, echo, clear, ls
+
+### Task Scheduling
+- **Async/await support** with Rust futures
+- **Task executor** with round-robin scheduling
+- **Task queue** using VecDeque
+- **Cooperative multitasking** via yield_now()
+- **Task identification** with atomic TaskId
+- **Pin-based future pinning** for safe async execution
 
 ### System Management
 - **GDT** (Global Descriptor Table) - CPU segmentation
@@ -92,8 +101,9 @@ This project demonstrates the fundamentals of OS creation:
 │  │  7. Frame Allocator (memory map parsing)  │  │
 │  │  8. Heap Init      (100 KiB allocator)    │  │
 │  │  9. File System    (RAMFS initialization) │  │
-│  │  10. Interrupts enabled                   │  │
-│  │  11. UI Launch     (shell prompt)         │  │
+│  │  10. Task System    (Executor init)       │  │
+│  │  11. Interrupts enabled                   │  │
+│  │  12. UI Launch     (shell prompt)         │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │  Memory Layout (Virtual Address Space)          │
@@ -104,6 +114,22 @@ This project demonstrates the fundamentals of OS creation:
 │  │  0x4444_4444_19000 - HEAP END             │  │
 │  │  ...                                      │  │
 │  │  Higher half kernel (identity mapped)     │  │
+│  └───────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────┤
+│  Task Scheduling Architecture                    │
+│  ┌───────────────────────────────────────────┐  │
+│  │  Executor                                  │  │
+│  │  ├── Task Queue: VecDeque<Task>           │  │
+│  │  ├── spawn(task) → push_back              │  │
+│  │  └── run() → poll futures in loop         │  │
+│  │                                            │  │
+│  │  Task                                      │  │
+│  │  ├── id: TaskId (atomic u64)              │  │
+│  │  └── future: Pin<Box<dyn Future>>         │  │
+│  │                                            │  │
+│  │  YieldNow Future                          │  │
+│  │  ├── yielded: bool                        │  │
+│  │  └── poll() → Pending/Ready               │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │  Managed Peripherals:                           │
@@ -131,7 +157,8 @@ jc-os/
 │   ├── memory.rs                 # Paging + frame allocator
 │   ├── allocator.rs              # Heap allocator (linked-list)
 │   ├── fs.rs                     # RAM File System (RAMFS)
-│   ├── task.rs                   # Task structures (for future scheduling)
+│   ├── task.rs                   # Task structures + async support
+│   ├── executor.rs               # Task executor + scheduler
 │   └── drivers/
 │       ├── mod.rs                # Drivers module (export)
 │       ├── keyboard.rs           # PS/2 AZERTY keyboard driver + shell
@@ -236,7 +263,79 @@ Storage:
 • No persistence (data lost on reboot)
 ```
 
-### 6. VGA Buffer (`src/vga_buffer.rs`)
+### 6. Task Management (`src/task.rs`)
+**Role**: Async task structures and cooperative multitasking
+
+```
+TaskId:
+• Atomic u64 counter for unique identification
+• Thread-safe ID generation
+• Implements Debug, Clone, Copy, Eq, Ord
+
+Task:
+• id: TaskId - Unique task identifier
+• future: Pin<Box<dyn Future<Output = ()>>>
+  - Pinned future for safe async execution
+  - Boxed for heap allocation
+  - Sized for task queue storage
+
+YieldNow Future:
+• Cooperative multitasking primitive
+• yielded: bool flag
+• First poll returns Pending, second returns Ready
+• Used for task yielding in async contexts
+
+yield_now() Function:
+• Creates YieldNow future
+• Enables cooperative task switching
+• Simple API for async code
+```
+
+### 7. Task Executor (`src/executor.rs`)
+**Role**: Async task scheduler and runtime
+
+```
+Executor Structure:
+• task_queue: VecDeque<Task>
+  - Double-ended queue for efficient push/pop
+  - FIFO ordering for round-robin scheduling
+  - Dynamic task storage
+
+Methods:
+• new() -> Self
+  - Creates empty executor instance
+  - Initializes task queue
+
+• spawn(&mut self, task: Task)
+  - Adds task to end of queue
+  - Task: Future wrapped in Task struct
+  - Non-blocking operation
+
+• run(&mut self) -> !
+  - Main executor loop
+  - Calls run_ready_tasks() repeatedly
+  - Uses hlt() for power efficiency
+  - Never returns (infinite loop)
+
+• run_ready_tasks(&mut self)
+  - Polls all ready tasks
+  - Processes tasks in queue order
+  - Maintains remaining_tasks counter
+  - Re-queues pending tasks
+
+Internal Functions:
+• dummy_waker() -> Waker
+  - Creates no-op waker for polling
+  - RawWaker with minimal VTable
+  - Required by Context::from_waker()
+
+Waker Implementation:
+• clone: Duplicates RawWaker
+• no_op: Empty wake function
+• VTable: Static RawWakerVTable
+```
+
+### 8. VGA Buffer (`src/vga_buffer.rs`)
 **Role**: Text display on VGA screen
 
 ```
@@ -253,7 +352,7 @@ Features:
 • Color-coded output support
 ```
 
-### 7. PS/2 Keyboard (`src/drivers/keyboard.rs`)
+### 9. PS/2 Keyboard (`src/drivers/keyboard.rs`)
 **Role**: Translates scancodes to characters and shell command handling
 
 ```
@@ -286,7 +385,7 @@ Handled Keys:
 • Enter, Backspace, Escape
 ```
 
-### 8. Serial Port (`src/serial.rs`)
+### 10. Serial Port (`src/serial.rs`)
 **Role**: Debugging via serial connection
 
 ```
@@ -301,17 +400,6 @@ Usage:
 • Memory stats: "Heap Allocator Ready"
 • Panic display
 • Serial print for debugging
-```
-
-### 9. Task Management (`src/task.rs`)
-**Role**: Task structures for future multi-tasking support
-
-```
-Planned Features:
-• Task struct with dedicated stack (4096 bytes)
-• TaskContext for saving CPU state
-• TaskId for task identification
-• Preemptive scheduling (future)
 ```
 
 ## 🚀 Installation and Compilation
@@ -399,6 +487,7 @@ qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc
 [FRAMES] Boot info frame allocator ready
 [SYSTEM] Heap Allocator Ready
 [FS] RAM File System initialized
+[EXECUTOR] Task scheduler ready
 
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║           JC-OS - BARE METAL KERNEL v0.2 - RUST                       ║
@@ -406,6 +495,7 @@ qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc
 
 Digital Sovereignty System
 File System: READY (RAMFS) | Commands examples: touch, ls, cat, rm, edit
+Task Scheduling: READY | Async/Await supported
 
 >>> help
 Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch
@@ -491,6 +581,9 @@ Check AZERTY layout mapping or try with US QWERTY layout.
 ### File system commands not working
 Ensure RAMFS is initialized: check boot log for "[FS] RAM File System initialized"
 
+### Async tasks not running
+Verify executor is initialized and run() is called in main loop
+
 ## 🔮 Future Improvements
 
 - [ ] **PS/2 Mouse Driver** - On-screen cursor tracking and click events
@@ -498,7 +591,10 @@ Ensure RAMFS is initialized: check boot log for "[FS] RAM File System initialize
 - [ ] **Kernel Heap Expansion** - Dynamic heap growth based on demand
 - [ ] **Persistent Storage** - Disk driver with FAT32 reading/writing
 - [ ] **Advanced Shell** - Tab completion, command history, environment variables
-- [ ] **Multi-tasking Support** - Preemptive scheduling with time slices
+- [ ] **Preemptive Scheduling** - Timer-based task switching
+- [ ] **Multiple Executors** - Multi-core task distribution
+- [ ] **Task Priorities** - Priority-based task scheduling
+- [ ] **Inter-Task Communication** - Channels, signals, and message passing
 - [ ] **Virtual File System** - VFS abstraction layer for multiple file systems
 - [ ] **Process Management** - Process creation, termination, and IPC
 - [ ] **System Calls** - User-mode to kernel-mode transitions
