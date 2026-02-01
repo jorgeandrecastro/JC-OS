@@ -88,7 +88,7 @@ fn display_screen() {
     writer.write_string("╚════════════════════════════════════════════════════════════════╝\n\n");
     writer.set_color_code(ColorCode::new(Color::White, Color::Black));
     writer.write_string("Digital Sovereignty System \n");
-    writer.write_string("File System: READY (RAMFS) | Memory: ACTIVE\n\n");
+    writer.write_string("File System: READY (RAMFS) | Commands exemples: touch, ls, cat, rm, edit\n\n");
     writer.write_string(">>> ");
 }
 

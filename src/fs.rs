@@ -43,4 +43,8 @@ impl RamFileSystem {
     pub fn list_files(&self) -> Vec<String> {
         self.files.keys().cloned().collect()
     }
+
+    pub fn remove_file(&mut self, name: &str) -> bool {
+        self.files.remove(name).is_some()
+    }
 }

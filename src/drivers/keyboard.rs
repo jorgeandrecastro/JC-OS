@@ -34,7 +34,7 @@ fn interpret_command(command: &str) {
 
     match cmd {
         "help" => {
-            println!("Commands: help, info, stats, echo, whoami, ls, touch, cat, clear, neofetch");
+            println!("Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch");
         },
         "info" => {
             println!("JC-OS v0.2 - Andre Edition");
@@ -46,7 +46,6 @@ fn interpret_command(command: &str) {
         "echo" => {
             println!("{}", args);
         },
-        // --- NOUVELLES COMMANDES DE SYSTÈME DE FICHIERS ---
         "ls" => {
             let fs = crate::fs::FS.lock();
             let files = fs.list_files();
@@ -76,7 +75,36 @@ fn interpret_command(command: &str) {
                 println!("Error: File '{}' not found.", args.trim());
             }
         },
-        // ------------------------------------------------
+        "rm" => {
+            let filename = args.trim();
+            if filename.is_empty() {
+                println!("Usage: rm <filename>");
+            } else {
+                let mut fs = crate::fs::FS.lock();
+                if fs.remove_file(filename) {
+                    println!("File '{}' deleted.", filename);
+                } else {
+                    println!("Error: File '{}' not found.", filename);
+                }
+            }
+        },
+        "edit" => {
+            let mut arg_parts = args.splitn(2, ' ');
+            let name = arg_parts.next().unwrap_or("");
+            let new_content = arg_parts.next().unwrap_or("");
+            
+            if name.is_empty() {
+                println!("Usage: edit <filename> <new_content>");
+            } else {
+                let mut fs = crate::fs::FS.lock();
+                if fs.files.contains_key(name) {
+                    fs.write_file(name, new_content);
+                    println!("File '{}' updated.", name);
+                } else {
+                    println!("Error: File '{}' does not exist.", name);
+                }
+            }
+        },
         "stats" => {
             println!("--- MEMORY STATS ---");
             println!("Heap Start : 0x444444440000");
@@ -90,6 +118,7 @@ fn interpret_command(command: &str) {
         "clear" => {
             crate::vga_buffer::clear_screen();
         },
+        // LE CAS PAR DÉFAUT TOUJOURS À LA FIN
         _ => {
             println!("Unknown command: {}", cmd);
         },
