@@ -12,7 +12,7 @@ lazy_static! {
             HandleControl::Ignore
         ));
 
-    static ref COMMAND_BUFFER: Mutex<String> = Mutex::new(String::with_capacity(80));
+    static ref COMMAND_BUFFER: Mutex<String> = Mutex::new(String::with_capacity(256));
 }
 
 pub fn init() {
@@ -106,9 +106,12 @@ fn interpret_command(command: &str) {
             }
         },
         "stats" => {
-            println!("--- MEMORY STATS ---");
-            println!("Heap Start : 0x444444440000");
-            println!("Heap Size  : 100 KB");
+            let (file_count, total_bytes) = crate::fs::FS.lock().get_stats();
+            println!("--- SYSTEM STATS ---");
+            println!("Files stored : {}", file_count);
+            println!("Used Memory  : {} bytes", total_bytes);
+            println!("Heap Size    : 100 KB");
+            println!("Buffer Cap   : {} chars", COMMAND_BUFFER.lock().capacity());
         },
         "neofetch" => {
             println!("  _/_/   JC-OS v0.2");
@@ -162,17 +165,23 @@ pub fn add_scancode(scancode: u8) {
         if let Some(decoded) = keyboard.process_keyevent(key_event) {
             if state == KeyState::Down {
                 match decoded {
-                    DecodedKey::Unicode(ch) => {
-                        if ch == '\n' || ch == '\r' {
-                            let mut cmd = COMMAND_BUFFER.lock();
-                            interpret_command(&cmd);
-                            cmd.clear();
-                        } else {
-                            COMMAND_BUFFER.lock().push(ch);
-                            vga_buffer::print_char(ch);
-                            serial_print!("{}", ch);
-                        }
-                    }
+                   DecodedKey::Unicode(ch) => {
+    if ch == '\n' || ch == '\r' {
+        // On récupère le contenu et on libère le lock immédiatement après
+        let cmd_to_run = {
+            let mut cmd = COMMAND_BUFFER.lock();
+            let content = cmd.clone(); // On fait une copie pour l'interprète
+            cmd.clear();               // On vide le buffer original
+            content                    // Le lock est relâché ici à la fermeture du bloc }
+        };
+
+        interpret_command(&cmd_to_run);
+    } else {
+        COMMAND_BUFFER.lock().push(ch);
+        vga_buffer::print_char(ch);
+        serial_print!("{}", ch);
+    }
+}
                     _ => {}
                 }
             }

@@ -47,4 +47,11 @@ impl RamFileSystem {
     pub fn remove_file(&mut self, name: &str) -> bool {
         self.files.remove(name).is_some()
     }
+
+    /// Retourne (nombre de fichiers, taille totale en octets)
+    pub fn get_stats(&self) -> (usize, usize) {
+        let count = self.files.len();
+        let total_size: usize = self.files.values().map(|f| f.data.len()).sum();
+        (count, total_size)
+    }
 }
