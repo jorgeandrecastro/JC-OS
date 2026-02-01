@@ -7,6 +7,7 @@ use lazy_static::lazy_static;
 
 /// Structure representing a single file in memory
 pub struct File {
+    #[allow(dead_code)]
     pub name: String,
     pub data: Vec<u8>,
 }

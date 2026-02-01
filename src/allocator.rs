@@ -39,6 +39,6 @@ pub fn init_heap(
 
     Ok(())
 }
-
+#[allow(dead_code)]
 pub fn heap_size() -> usize { HEAP_SIZE }
 pub fn heap_start() -> usize { HEAP_START }

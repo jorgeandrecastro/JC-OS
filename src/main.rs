@@ -10,6 +10,8 @@ extern crate alloc;
 use core::panic::PanicInfo;
 use bootloader::{BootInfo, entry_point};
 use x86_64::VirtAddr;
+use crate::executor::Executor;
+use crate::task::Task;
 
 mod vga_buffer;
 mod serial;
@@ -19,6 +21,8 @@ mod drivers;
 mod memory;
 mod allocator;
 mod fs; // Important: link the new file system
+pub mod task;
+pub mod executor;
 
 entry_point!(kernel_main);
 
@@ -53,9 +57,23 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // 6. UI Launch
     display_screen();
 
-    loop {
-        x86_64::instructions::hlt();
-    }
+    // --- ICI LE CHANGEMENT POUR LE MULTITACHE ---
+    let mut executor = Executor::new();
+
+    // Tâche 1 : Un compteur qui tourne en fond (exemple)
+    executor.spawn(Task::new(example_task())); // Tâche 1
+    executor.spawn(Task::new(message_task())); // Tâche 2
+
+   
+    
+    // Pour l'instant, on lance juste l'executor qui prend le contrôle
+    serial_println!("[SYSTEM] Multitasking Executor Started");
+    
+
+     // On lance l'exécuteur (ne revient jamais)
+    executor.run();
+
+    
 }
 
 #[alloc_error_handler]
@@ -96,4 +114,27 @@ fn display_screen() {
 fn panic(info: &PanicInfo) -> ! {
     serial_println!("\n[PANIC] {}", info);
     loop { x86_64::instructions::hlt(); }
+}
+
+async fn example_task() {
+    let mut count: u64 = 0;
+    loop {
+        count += 1;
+        if count % 1000000 == 0 {
+            // En l'utilisant ici, le warning disparaît
+            serial_println!("[TASK] Compteur : {}", count);
+        }
+        crate::task::yield_now().await;
+    }
+}
+async fn message_task() {
+    loop {
+        for _ in 0..500000 { core::hint::spin_loop(); }
+        serial_println!("Je suis la tache A");
+        crate::task::yield_now().await;
+        
+        for _ in 0..500000 { core::hint::spin_loop(); }
+        serial_println!("Je suis la tache B");
+        crate::task::yield_now().await;
+    }
 }

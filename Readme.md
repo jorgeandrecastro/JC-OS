@@ -14,6 +14,7 @@ This project demonstrates the fundamentals of OS creation:
 - Hardware interrupt handling
 - Virtual memory with paging
 - Dynamic memory allocation (heap)
+- RAM-based file system with interactive shell
 
 ## ✨ Implemented Features
 
@@ -23,12 +24,27 @@ This project demonstrates the fundamentals of OS creation:
 - **Automatic scrolling** when screen is full
 - **Smart backspace** with line wrapping
 - **Hardware cursor update** (ports 0x3D4/0x3D5)
+- **Color-coded UI elements** with border boxes
 
 ### Input
 - **PS/2 keyboard** with French AZERTY layout
 - **Scancode Set 2** (IBM standard)
 - **Complete alphanumeric key mapping**
 - **Special keys**: Enter, Backspace, Escape
+- **Command buffer** with 256 character capacity
+
+### File System
+- **RAM File System (RAMFS)** - In-memory file storage
+- **BTreeMap-based organization** for efficient file lookup
+- **File operations**: create, read, write, delete, list
+- **Statistics tracking**: file count and total size
+- **Unicode support** via UTF-8 lossless conversion
+
+### Interactive Shell
+- **Command interpreter** with multiple built-in commands
+- **File management commands**: touch, cat, rm, edit
+- **System information**: info, stats, whoami, neofetch
+- **Utility commands**: help, echo, clear, ls
 
 ### System Management
 - **GDT** (Global Descriptor Table) - CPU segmentation
@@ -36,6 +52,8 @@ This project demonstrates the fundamentals of OS creation:
 - **IDT** (Interrupt Descriptor Table) - Interrupt vectors
 - **PIC 8259** - Programmable Interrupt Controller
 - **Double Fault Handler** protected by IST (Interrupt Stack Table)
+- **Timer Interrupt** - Hardware timer (IRQ0) for future scheduling
+- **Keyboard Interrupt** - PS/2 keyboard input handling
 
 ### Memory Management
 - **x86_64 Paging** (4-level page tables)
@@ -44,18 +62,21 @@ This project demonstrates the fundamentals of OS creation:
 - **Heap allocation** (100 KiB) with linked-list allocator
 - **Virtual to physical address translation**
 - **Page-level protection** (PRESENT, WRITABLE flags)
+- **Error handling** with Result type and alloc_error_handler
 
 ### Debugging
 - **COM1 serial output** via UART 16550
 - **Complete boot logging**
 - **Memory statistics** display (heap start, size, status)
 - **Panic error display** via serial
+- **Interrupt event logging**
 
 ## 🏗️ System Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              JC-OS Kernel v0.1                   │
+│              JC-OS Kernel v0.2                   │
+│              Andre Edition                       │
 ├─────────────────────────────────────────────────┤
 │  Entry Point: kernel_main()                      │
 ├─────────────────────────────────────────────────┤
@@ -70,7 +91,9 @@ This project demonstrates the fundamentals of OS creation:
 │  │  6. Paging Setup  (4-level page tables)   │  │
 │  │  7. Frame Allocator (memory map parsing)  │  │
 │  │  8. Heap Init      (100 KiB allocator)    │  │
-│  │  9. Interrupts enabled                    │  │
+│  │  9. File System    (RAMFS initialization) │  │
+│  │  10. Interrupts enabled                   │  │
+│  │  11. UI Launch     (shell prompt)         │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │  Memory Layout (Virtual Address Space)          │
@@ -88,6 +111,7 @@ This project demonstrates the fundamentals of OS creation:
 │  • COM1 0x3F8   - Serial port                  │
 │  • PIC 0x20/0xA0 - Interrupt controller        │
 │  • PS/2 0x60/0x64 - Keyboard                   │
+│  • PIT 0x40     - Programmable Interval Timer  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -106,9 +130,11 @@ jc-os/
 │   ├── serial.rs                 # COM1 serial output (UART 16550)
 │   ├── memory.rs                 # Paging + frame allocator
 │   ├── allocator.rs              # Heap allocator (linked-list)
+│   ├── fs.rs                     # RAM File System (RAMFS)
+│   ├── task.rs                   # Task structures (for future scheduling)
 │   └── drivers/
 │       ├── mod.rs                # Drivers module (export)
-│       ├── keyboard.rs           # PS/2 AZERTY keyboard driver
+│       ├── keyboard.rs           # PS/2 AZERTY keyboard driver + shell
 │       └── mouse.rs              # PS/2 mouse driver (in development)
 └── target/
     └── x86_64-jc-os/             # Compiled binaries
@@ -132,7 +158,7 @@ jc-os/
 ```
 Configured Vectors:
 • Double Fault (CPU Exception) → Isolated stack
-• Timer (IRQ0)    → Basic handler
+• Timer (IRQ0)    → Basic handler (for future scheduling)
 • Keyboard (IRQ1) → Keyboard driver
 
 PIC Configuration:
@@ -180,6 +206,7 @@ Initialization:
 • Maps 25 pages (25 × 4KiB = 100 KiB)
 • Initializes LockedHeap with start pointer
 • Provides heap_start() and heap_size() queries
+• Returns Result<(), ()> for error handling
 
 Memory Statistics (displayed at boot):
 • Heap Start : 0x444444440000
@@ -187,7 +214,29 @@ Memory Statistics (displayed at boot):
 • Status     : DYNAMIC ALLOCATION OK
 ```
 
-### 5. VGA Buffer (`src/vga_buffer.rs`)
+### 5. RAM File System (`src/fs.rs`)
+**Role**: In-memory file storage and management
+
+```
+Structure:
+• File: name (String) + data (Vec<u8>)
+• RamFileSystem: BTreeMap<String, File>
+• Global instance protected by Mutex
+
+Features:
+• write_file(name, content) - Create/overwrite files
+• read_file(name) - Read file as String (returns Option)
+• list_files() - Returns Vec<String> of all filenames
+• remove_file(name) - Delete file (returns bool)
+• get_stats() - Returns (file_count, total_bytes)
+
+Storage:
+• In-memory only (volatile)
+• Unicode support via UTF-8 lossless conversion
+• No persistence (data lost on reboot)
+```
+
+### 6. VGA Buffer (`src/vga_buffer.rs`)
 **Role**: Text display on VGA screen
 
 ```
@@ -199,26 +248,45 @@ Specifications:
 Features:
 • 16 ANSI colors (Black → White)
 • Automatic scroll with line preservation
-• Smart backstack (wraps to previous line)
+• Smart backspace (wraps to previous line)
 • Hardware cursor update
+• Color-coded output support
 ```
 
-### 6. PS/2 Keyboard (`src/drivers/keyboard.rs`)
-**Role**: Translates scancodes to characters
+### 7. PS/2 Keyboard (`src/drivers/keyboard.rs`)
+**Role**: Translates scancodes to characters and shell command handling
 
 ```
 Configuration:
 • Layout: French AZERTY
 • Scancode Set: 2 (IBM standard)
 • Control: Ignore Ctrl (for testing)
+• Command Buffer: 256 character capacity
+
+Shell Commands:
+• help     - Show available commands
+• info     - Display system information
+• whoami   - Display current user
+• echo     - Print text to screen
+• ls       - List files in RAMFS
+• touch    - Create new file
+• cat      - Read file content
+• rm       - Delete file
+• edit     - Modify existing file
+• stats    - Show filesystem statistics
+• neofetch - Display system info (ASCII art)
+• clear    - Clear screen
+• Esc      - Clear buffer + reset screen
 
 Handled Keys:
-• Letters a-z, digits 0-9
-• AZERTY special characters
+• Letters a-z, A-Z (AZERTY layout)
+• Digits 0-9
+• French accented characters (è, é, ê, ë)
+• Special characters (, ; : !)
 • Enter, Backspace, Escape
 ```
 
-### 7. Serial Port (`src/serial.rs`)
+### 8. Serial Port (`src/serial.rs`)
 **Role**: Debugging via serial connection
 
 ```
@@ -228,10 +296,22 @@ Configuration:
 • Output: stdout during QEMU debugging
 
 Usage:
-• Boot log: "[JC-OS] Booting..."
+• Boot log: "[JC-OS] Kernel starting..."
 • System log: "[GDT] Loaded", "[IDT] Loaded"
-• Memory stats: "Heap Start: 0x..."
+• Memory stats: "Heap Allocator Ready"
 • Panic display
+• Serial print for debugging
+```
+
+### 9. Task Management (`src/task.rs`)
+**Role**: Task structures for future multi-tasking support
+
+```
+Planned Features:
+• Task struct with dedicated stack (4096 bytes)
+• TaskContext for saving CPU state
+• TaskId for task identification
+• Preemptive scheduling (future)
 ```
 
 ## 🚀 Installation and Compilation
@@ -272,25 +352,44 @@ qemu-system-x86_64 \
   -serial stdio
 ```
 
-## ⌨️ Keyboard Commands
+## ⌨️ Shell Commands
 
-| Key | Action |
-|-----|--------|
-| `a` - `z` | Lowercase letter input |
-| `A` - `Z` | Uppercase letter input |
-| `0` - `9` | Digits |
-| `è` `é` `ê` `ë` | French accented characters |
-| `,` `;` `:` `!` | Special characters |
-| `Enter` | New line + carriage return |
+### File Management
+
+| Command | Description | Usage |
+|---------|-------------|-------|
+| `touch` | Create new file | `touch <filename> <content>` |
+| `cat` | Read file content | `cat <filename>` |
+| `rm` | Delete file | `rm <filename>` |
+| `edit` | Modify file | `edit <filename> <new_content>` |
+| `ls` | List all files | `ls` |
+
+### System Information
+
+| Command | Description | Output Example |
+|---------|-------------|----------------|
+| `info` | Display system info | JC-OS v0.2 - Andre Edition |
+| `whoami` | Display current user | Andre |
+| `stats` | Show filesystem stats | Files: 3, Memory: 256 bytes |
+| `neofetch` | ASCII system info | Art + system details |
+
+### Utilities
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands |
+| `echo` | Print text to screen |
+| `clear` | Clear the screen |
+| `Enter` | Execute command |
 | `Backspace` | Delete previous character |
-| `Esc` | Clear entire screen |
+| `Esc` | Clear buffer + reset screen |
 
 ## 🔍 Example Session
 
 ```
 qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc-os.bin -serial stdio
 
-[JC-OS] Booting...
+[JC-OS] Kernel starting...
 [GDT] Loaded
 [IDT] Interrupt Descriptor Table loaded
 [PIC] Initialized - Timer and Keyboard enabled
@@ -298,21 +397,50 @@ qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc
 [KEYBOARD] Driver initialized (AZERTY layout, Set2)
 [PAGING] 4-Level page tables initialized
 [FRAMES] Boot info frame allocator ready
-[HEAP] Heap initialized at 0x444444440000 (100 KiB)
-[SYSTEM] Interrupts enabled
+[SYSTEM] Heap Allocator Ready
+[FS] RAM File System initialized
 
---- JC-OS MEMORY STATS ---
-Heap Start : 0x444444440000
-Heap Size  : 100 KB
-Status     : DYNAMIC ALLOCATION OK
+╔═══════════════════════════════════════════════════════════════════════╗
+║           JC-OS - BARE METAL KERNEL v0.2 - RUST                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
 
-╔════════════════════════════════════════════════════════════════════════╗
-║              JC-OS - BARE METAL KERNEL v0.1                            ║
-╚════════════════════════════════════════════════════════════════════════╝
+Digital Sovereignty System
+File System: READY (RAMFS) | Commands examples: touch, ls, cat, rm, edit
 
-Keyboard active. Start typing...
+>>> help
+Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch
 
->>> Hello JC-OS!
+>>> touch hello.txt "Hello JC-OS!"
+File 'hello.txt' saved to RAM.
+
+>>> touch test.txt "This is a test"
+File 'test.txt' saved to RAM.
+
+>>> ls
+- hello.txt
+- test.txt
+
+>>> cat hello.txt
+Hello JC-OS!
+
+>>> stats
+--- SYSTEM STATS ---
+Files stored : 2
+Used Memory  : 21 bytes
+Heap Size    : 100 KB
+Buffer Cap   : 256 chars
+
+>>> neofetch
+  _/_/   JC-OS v0.2
+ _/      Kernel: Rust 64-bit
+_/_/_/   User: Andre
+
+>>> whoami
+Andre
+
+>>> clear
+
+>>> 
 ```
 
 ## 📦 Cargo Dependencies
@@ -328,6 +456,7 @@ Keyboard active. Start typing...
 | `lazy_static` | 1.4.0 | Deferred static initialization |
 | `volatile` | 0.2.6 | VGA volatile memory access |
 | `linked_list_allocator` | 0.10 | Heap allocation algorithm |
+| `alloc` | - | Dynamic memory allocation |
 
 ## 🐛 Troubleshooting
 
@@ -356,16 +485,26 @@ Use `-serial stdio` parameter to redirect COM1 to the terminal.
 Ensure enough physical memory is available (QEMU default: 128MiB).
 Increase with: `-m 256M`
 
+### Keyboard not responding
+Check AZERTY layout mapping or try with US QWERTY layout.
+
+### File system commands not working
+Ensure RAMFS is initialized: check boot log for "[FS] RAM File System initialized"
+
 ## 🔮 Future Improvements
 
-- [ ] **PS/2 Mouse Driver** - On-screen cursor tracking
-- [ ] **Page Fault Handler** - Better memory error reporting
-- [ ] **Kernel Heap Expansion** - Dynamic heap growth
-- [ ] **File System** - FAT32 reading
-- [ ] **Interactive Shell** - User commands
-- [ ] **Multi-tasking Support** - Preemptive scheduling
-- [ ] **Virtual File System** - VFS abstraction layer
-
+- [ ] **PS/2 Mouse Driver** - On-screen cursor tracking and click events
+- [ ] **Page Fault Handler** - Better memory error reporting and debugging
+- [ ] **Kernel Heap Expansion** - Dynamic heap growth based on demand
+- [ ] **Persistent Storage** - Disk driver with FAT32 reading/writing
+- [ ] **Advanced Shell** - Tab completion, command history, environment variables
+- [ ] **Multi-tasking Support** - Preemptive scheduling with time slices
+- [ ] **Virtual File System** - VFS abstraction layer for multiple file systems
+- [ ] **Process Management** - Process creation, termination, and IPC
+- [ ] **System Calls** - User-mode to kernel-mode transitions
+- [ ] **Memory Protection** - User/kernel memory isolation
+- [ ] **Network Support** - Network card driver and basic networking
+- [ ] **GUI Subsystem** - Window manager and basic graphics
 
 ## 📄 License
 
@@ -374,4 +513,9 @@ This project is licensed under Apache 2.0.
 ## 🤝 Contributions
 
 Issues and pull requests are welcome to improve the project!
+
+---
+
+**JC-OS v0.2 - Andre Edition**  
+A minimalist bare-metal operating system written in Rust
 
