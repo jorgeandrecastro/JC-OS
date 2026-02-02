@@ -21,8 +21,11 @@ mod drivers;
 mod memory;
 mod allocator;
 mod fs; // Important: link the new file system
+mod shell; // Important: link the new shell
+mod auth;// Important: link the new authentication module
 pub mod task;
 pub mod executor;
+
 
 entry_point!(kernel_main);
 
@@ -60,20 +63,18 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // --- ICI LE CHANGEMENT POUR LE MULTITACHE ---
     let mut executor = Executor::new();
 
-    // Tâche 1 : Un compteur qui tourne en fond (exemple)
-    executor.spawn(Task::new(example_task())); // Tâche 1
-    executor.spawn(Task::new(message_task())); // Tâche 2
-    executor.spawn(Task::new(clock_task()));   // Tâche 3 : Horloge
-
-   
+    // 1. On lance le Shell (il va afficher le prompt et gérer les commandes)")
+    executor.spawn(Task::new(shell::run_shell()));
     
-    // Pour l'instant, on lance juste l'executor qui prend le contrôle
+    // 2. On garde l'horloge
+    executor.spawn(Task::new(clock_task()));   
+
+    // 3. On peut garder les autres tâches de fond
+    executor.spawn(Task::new(example_task())); 
+
     serial_println!("[SYSTEM] Multitasking Executor Started");
     
-
-     // On lance l'exécuteur (ne revient jamais)
     executor.run();
-
     
 }
 
@@ -103,12 +104,12 @@ fn display_screen() {
     writer.clear_screen();
     writer.set_color_code(ColorCode::new(Color::LightCyan, Color::Black));
     writer.write_string("╔════════════════════════════════════════════════════════════════╗\n");
-    writer.write_string("║           JC-OS - BARE METAL KERNEL v0.2 - RUST              ║\n");
+    writer.write_string("║           JC-OS - BARE METAL KERNEL v0.3 - RUST              ║\n");
     writer.write_string("╚════════════════════════════════════════════════════════════════╝\n\n");
     writer.set_color_code(ColorCode::new(Color::White, Color::Black));
     writer.write_string("Digital Sovereignty System \n");
     writer.write_string("File System: READY (RAMFS) | Commands exemples: touch, ls, cat, rm, edit\n\n");
-    writer.write_string(">>> ");
+
 }
 
 #[panic_handler]

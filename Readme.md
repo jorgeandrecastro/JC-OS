@@ -16,6 +16,8 @@ This project demonstrates the fundamentals of OS creation:
 - Dynamic memory allocation (heap)
 - RAM-based file system with interactive shell
 - Async/await task scheduling with executor
+- Real-time clock (RTC) for time keeping
+- User authentication with role-based access control
 
 ## ✨ Implemented Features
 
@@ -44,8 +46,22 @@ This project demonstrates the fundamentals of OS creation:
 ### Interactive Shell
 - **Command interpreter** with multiple built-in commands
 - **File management commands**: touch, cat, rm, edit
-- **System information**: info, stats, whoami, neofetch
+- **System information**: info, stats, whoami, neofetch, date
 - **Utility commands**: help, echo, clear, ls
+- **Secure login system** with authentication
+
+### User Authentication
+- **Role-based access control** with Admin and Standard roles
+- **User management** with login/logout functionality
+- **Session tracking** with current user identification
+- **Password authentication** with credential validation
+- **Default admin account**: username "andre", password "admin123"
+
+### Real-Time Clock (RTC)
+- **CMOS RTC access** via ports 0x70/0x71
+- **BCD to decimal conversion** for accurate time reading
+- **Time struct** with hours, minutes, seconds
+- **Non-volatile time keeping** independent of system power
 
 ### Task Scheduling
 - **Async/await support** with Rust futures
@@ -84,7 +100,7 @@ This project demonstrates the fundamentals of OS creation:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              JC-OS Kernel v0.2                   │
+│              JC-OS Kernel v0.3                   │
 │              Andre Edition                       │
 ├─────────────────────────────────────────────────┤
 │  Entry Point: kernel_main()                      │
@@ -101,9 +117,11 @@ This project demonstrates the fundamentals of OS creation:
 │  │  7. Frame Allocator (memory map parsing)  │  │
 │  │  8. Heap Init      (100 KiB allocator)    │  │
 │  │  9. File System    (RAMFS initialization) │  │
-│  │  10. Task System    (Executor init)       │  │
-│  │  11. Interrupts enabled                   │  │
-│  │  12. UI Launch     (shell prompt)         │  │
+│  │  10. Auth System    (user management)     │  │
+│  │  11. RTC Driver     (time keeping)        │  │
+│  │  12. Task System    (Executor init)       │  │
+│  │  13. Interrupts enabled                   │  │
+│  │  14. UI Launch     (shell prompt)         │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │  Memory Layout (Virtual Address Space)          │
@@ -132,12 +150,32 @@ This project demonstrates the fundamentals of OS creation:
 │  │  └── poll() → Pending/Ready               │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
+│  Authentication Architecture                     │
+│  ┌───────────────────────────────────────────┐  │
+│  │  AuthManager                               │  │
+│  │  ├── users: Vec<User>                     │  │
+│  │  ├── current_user: Option<User>           │  │
+│  │  ├── login(username, password) -> bool    │  │
+│  │  ├── logout()                             │  │
+│  │  └── get_current_username() -> String     │  │
+│  │                                            │  │
+│  │  User                                      │  │
+│  │  ├── username: String                     │  │
+│  │  ├── password_hash: String                │  │
+│  │  └── role: Role (Admin/Standard)          │  │
+│  │                                            │  │
+│  │  Role Enum                                │  │
+│  │  ├── Admin     - Full system access       │  │
+│  │  └── Standard  - Limited access           │  │
+│  └───────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────┤
 │  Managed Peripherals:                           │
 │  • VGA 0xB8000  - Text screen                  │
 │  • COM1 0x3F8   - Serial port                  │
 │  • PIC 0x20/0xA0 - Interrupt controller        │
 │  • PS/2 0x60/0x64 - Keyboard                   │
 │  • PIT 0x40     - Programmable Interval Timer  │
+│  • RTC 0x70/0x71 - Real Time Clock (CMOS)      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -157,12 +195,15 @@ jc-os/
 │   ├── memory.rs                 # Paging + frame allocator
 │   ├── allocator.rs              # Heap allocator (linked-list)
 │   ├── fs.rs                     # RAM File System (RAMFS)
+│   ├── auth.rs                   # User authentication system
 │   ├── task.rs                   # Task structures + async support
 │   ├── executor.rs               # Task executor + scheduler
+│   ├── shell.rs                  # Interactive shell with login
 │   └── drivers/
 │       ├── mod.rs                # Drivers module (export)
 │       ├── keyboard.rs           # PS/2 AZERTY keyboard driver + shell
-│       └── mouse.rs              # PS/2 mouse driver (in development)
+│       ├── mouse.rs              # PS/2 mouse driver (in development)
+│       └── rtc.rs                # Real Time Clock driver
 └── target/
     └── x86_64-jc-os/             # Compiled binaries
 ```
@@ -263,7 +304,86 @@ Storage:
 • No persistence (data lost on reboot)
 ```
 
-### 6. Task Management (`src/task.rs`)
+### 6. User Authentication (`src/auth.rs`)
+**Role**: User management and access control
+
+```
+Structure:
+• Role Enum: Admin, Standard
+• User: username, password_hash, role
+• AuthManager: users Vec, current_user Option
+
+Features:
+• login(username, password) -> bool
+  - Authenticates user credentials
+  - Case-insensitive username matching
+  - Returns true on successful authentication
+
+• logout()
+  - Clears current user session
+  - Sets current_user to None
+
+• get_current_username() -> String
+  - Returns current username or "Guest" if not logged in
+
+• Role-based access control
+  - Admin: Full system access
+  - Standard: Limited permissions (future)
+
+Default User:
+• Username: "andre"
+• Password: "admin123"
+• Role: Admin
+
+Security Features:
+• Password masking during input
+• Session management
+• Credential validation
+• Case-insensitive username matching
+
+Lazy Static Initialization:
+• AUTH: Mutex<AuthManager> for thread-safe access
+• Automatically initialized at kernel startup
+```
+
+### 7. Real-Time Clock (`src/drivers/rtc.rs`)
+**Role**: CMOS RTC access for time keeping
+
+```
+Hardware Interface:
+• Address Port: 0x70 (write register index)
+• Data Port: 0x71 (read/write data)
+• BCD Format: Binary Coded Decimal
+
+RtcTime Structure:
+• seconds: u8 (0-59)
+• minutes: u8 (0-59)
+• hours: u8 (0-23)
+
+Functions:
+• read_rtc_register(reg: u8) -> u8
+  - Writes register index to port 0x70
+  - Reads data from port 0x71
+  - Returns raw BCD value
+
+• get_time() -> RtcTime
+  - Reads registers 0x00 (seconds), 0x02 (minutes), 0x04 (hours)
+  - Converts BCD to decimal
+  - Returns RtcTime struct
+
+BCD Conversion:
+• BCD = (value & 0x0F) + ((value / 16) * 10)
+• Extracts low nibble and high nibble
+• Combines for correct decimal value
+
+Features:
+• Battery-backed time keeping (independent of power)
+• Standard CMOS RTC chip compatible
+• 24-hour format support
+• No interrupts required for reading
+```
+
+### 8. Task Management (`src/task.rs`)
 **Role**: Async task structures and cooperative multitasking
 
 ```
@@ -291,7 +411,7 @@ yield_now() Function:
 • Simple API for async code
 ```
 
-### 7. Task Executor (`src/executor.rs`)
+### 9. Task Executor (`src/executor.rs`)
 **Role**: Async task scheduler and runtime
 
 ```
@@ -335,7 +455,7 @@ Waker Implementation:
 • VTable: Static RawWakerVTable
 ```
 
-### 8. VGA Buffer (`src/vga_buffer.rs`)
+### 10. VGA Buffer (`src/vga_buffer.rs`)
 **Role**: Text display on VGA screen
 
 ```
@@ -352,7 +472,7 @@ Features:
 • Color-coded output support
 ```
 
-### 9. PS/2 Keyboard (`src/drivers/keyboard.rs`)
+### 11. PS/2 Keyboard (`src/drivers/keyboard.rs`)
 **Role**: Translates scancodes to characters and shell command handling
 
 ```
@@ -366,6 +486,7 @@ Shell Commands:
 • help     - Show available commands
 • info     - Display system information
 • whoami   - Display current user
+• date     - Display current time from RTC
 • echo     - Print text to screen
 • ls       - List files in RAMFS
 • touch    - Create new file
@@ -385,7 +506,42 @@ Handled Keys:
 • Enter, Backspace, Escape
 ```
 
-### 10. Serial Port (`src/serial.rs`)
+### 12. Interactive Shell (`src/shell.rs`)
+**Role**: Command interpreter with authentication
+
+```
+Shell Features:
+• Secure login system on boot
+• Password masking for sensitive input
+• Command history and buffer management
+• Multi-line command support
+• Color-coded prompt with user info
+
+Login System:
+• Requires authentication before command access
+• Username and password prompts
+• Credential validation via AuthManager
+• Session persistence until logout
+
+Prompt Format:
+• Shows current username and hostname
+• Visual indicator of authentication status
+• Example: "andre@jc-os:~$ "
+
+Session Management:
+• Automatic login requirement
+• Session tracking with AuthManager
+• User identification for commands
+• Future: Multiple user sessions
+
+Command Buffer:
+• 256 character capacity
+• Backspace with visual feedback
+• Escape key to clear and reset
+• Support for long commands with wrapping
+```
+
+### 13. Serial Port (`src/serial.rs`)
 **Role**: Debugging via serial connection
 
 ```
@@ -440,7 +596,28 @@ qemu-system-x86_64 \
   -serial stdio
 ```
 
+## 🔐 Login Credentials
+
+By default, JC-OS v0.3 includes a secure login system:
+
+```
+Username: andre
+Password: admin123
+Role: Admin
+```
+
+**Note**: The first time you run JC-OS v0.3, you will be presented with a login screen. Use the default credentials above to access the shell.
+
 ## ⌨️ Shell Commands
+
+### Authentication
+
+| Command | Description |
+|---------|-------------|
+| (Login) | Enter username and password at startup |
+| whoami  | Display current authenticated user |
+| logout  | End current session (future) |
+| passwd  | Change password (future) |
 
 ### File Management
 
@@ -456,8 +633,9 @@ qemu-system-x86_64 \
 
 | Command | Description | Output Example |
 |---------|-------------|----------------|
-| `info` | Display system info | JC-OS v0.2 - Andre Edition |
-| `whoami` | Display current user | Andre |
+| `info` | Display system info | JC-OS v0.3 - Andre Edition |
+| `whoami` | Display current user | andre |
+| `date` | Display current time | Time: 14:30:45 |
 | `stats` | Show filesystem stats | Files: 3, Memory: 256 bytes |
 | `neofetch` | ASCII system info | Art + system details |
 
@@ -487,50 +665,59 @@ qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc
 [FRAMES] Boot info frame allocator ready
 [SYSTEM] Heap Allocator Ready
 [FS] RAM File System initialized
+[AUTH] Authentication system initialized
+[RTC] Real Time Clock initialized
 [EXECUTOR] Task scheduler ready
 
-╔═══════════════════════════════════════════════════════════════════════╗
-║           JC-OS - BARE METAL KERNEL v0.2 - RUST                       ║
-╚═══════════════════════════════════════════════════════════════════════╝
+ JC-OS - BARE METAL KERNEL v0.3 - RUST EDITION
+
+--- LOGIN REQUIRED ---
+Username: andre
+Password: ********
+Welcome back, andre!
 
 Digital Sovereignty System
 File System: READY (RAMFS) | Commands examples: touch, ls, cat, rm, edit
 Task Scheduling: READY | Async/Await supported
+Authentication: ENABLED | Session active
 
->>> help
-Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch
+andre@jc-os:~$ help
+Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch, date
 
->>> touch hello.txt "Hello JC-OS!"
+andre@jc-os:~$ date
+Time: 14:30:45
+
+andre@jc-os:~$ touch hello.txt "Hello JC-OS!"
 File 'hello.txt' saved to RAM.
 
->>> touch test.txt "This is a test"
+andre@jc-os:~$ touch test.txt "This is a test"
 File 'test.txt' saved to RAM.
 
->>> ls
+andre@jc-os:~$ ls
 - hello.txt
 - test.txt
 
->>> cat hello.txt
+andre@jc-os:~$ cat hello.txt
 Hello JC-OS!
 
->>> stats
+andre@jc-os:~$ stats
 --- SYSTEM STATS ---
 Files stored : 2
 Used Memory  : 21 bytes
 Heap Size    : 100 KB
 Buffer Cap   : 256 chars
 
->>> neofetch
-  _/_/   JC-OS v0.2
+andre@jc-os:~$ neofetch
+  _/_/   JC-OS v0.3
  _/      Kernel: Rust 64-bit
-_/_/_/   User: Andre
+_/_/_/   User: andre
 
->>> whoami
-Andre
+andre@jc-os:~$ whoami
+andre
 
->>> clear
+andre@jc-os:~$ clear
 
->>> 
+andre@jc-os:~$
 ```
 
 ## 📦 Cargo Dependencies
@@ -546,6 +733,7 @@ Andre
 | `lazy_static` | 1.4.0 | Deferred static initialization |
 | `volatile` | 0.2.6 | VGA volatile memory access |
 | `linked_list_allocator` | 0.10 | Heap allocation algorithm |
+| `crossbeam-queue` | 0.3.12 | Lock-free queue for task scheduling |
 | `alloc` | - | Dynamic memory allocation |
 
 ## 🐛 Troubleshooting
@@ -581,6 +769,17 @@ Check AZERTY layout mapping or try with US QWERTY layout.
 ### File system commands not working
 Ensure RAMFS is initialized: check boot log for "[FS] RAM File System initialized"
 
+### RTC time showing incorrect values
+- Verify RTC is properly initialized in QEMU
+- Check CMOS battery status (virtual in QEMU)
+- Ensure BCD conversion is working correctly
+
+### Authentication login fails
+- Verify credentials: username "andre", password "admin123"
+- Check that AUTH system initialized in boot log
+- Ensure passwords are case-sensitive for username matching
+- Try resetting credentials if persistent storage available
+
 ### Async tasks not running
 Verify executor is initialized and run() is called in main loop
 
@@ -599,8 +798,33 @@ Verify executor is initialized and run() is called in main loop
 - [ ] **Process Management** - Process creation, termination, and IPC
 - [ ] **System Calls** - User-mode to kernel-mode transitions
 - [ ] **Memory Protection** - User/kernel memory isolation
+- [ ] **Enhanced Authentication** - Password hashing, multiple users, sudo-like system
+- [ ] **User Management** - adduser, deluser, user permissions, role management
+- [ ] **Session Management** - Multiple concurrent sessions, session switching
+- [ ] **Audit Logging** - Authentication logs, command history tracking
 - [ ] **Network Support** - Network card driver and basic networking
 - [ ] **GUI Subsystem** - Window manager and basic graphics
+- [ ] **Date/Time Functions** - Date display, alarm, timezone support
+- [ ] **File Permissions** - User-based file access control
+
+## 🔒 Security Features
+
+### Current Implementation
+- **User Authentication**: Login required before shell access
+- **Role-Based Access**: Admin vs Standard user roles
+- **Session Management**: Track current authenticated user
+- **Password Masking**: Hide password input during login
+- **Credential Validation**: Case-insensitive username matching
+
+### Planned Security Enhancements
+- **Password Hashing**: Replace plain-text password storage with bcrypt/argon2
+- **Multi-Factor Authentication**: Additional verification methods
+- **Session Timeout**: Automatic logout after inactivity
+- **Account Lockout**: Brute-force protection
+- **Audit Trail**: Log all authentication attempts and privileged actions
+- **Secure Boot**: Verify kernel integrity at startup
+- **User Isolation**: Separate memory spaces per user
+- **Permission System**: File and command access control
 
 ## 📄 License
 
@@ -612,6 +836,5 @@ Issues and pull requests are welcome to improve the project!
 
 ---
 
-**JC-OS v0.2 - Andre Edition**  
+**JC-OS v0.3 - Andre Edition**  
 A minimalist bare-metal operating system written in Rust
-

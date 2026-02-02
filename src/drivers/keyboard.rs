@@ -1,190 +1,46 @@
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet2, KeyCode, KeyState};
+use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet2, DecodedKey, KeyState};
 use spin::Mutex;
 use lazy_static::lazy_static;
-use crate::{vga_buffer, serial_println, serial_print, print, println};
-use alloc::string::String;
+use crossbeam_queue::ArrayQueue;
 
 lazy_static! {
+    /// File d'attente pour les touches décodées
+    pub static ref KEY_QUEUE: ArrayQueue<DecodedKey> = ArrayQueue::new(100);
+
+    /// État interne du clavier (AZERTY)
     static ref KEYBOARD: Mutex<Keyboard<layouts::Azerty, ScancodeSet2>> =
         Mutex::new(Keyboard::new(
             ScancodeSet2::new(),
             layouts::Azerty,
             HandleControl::Ignore
         ));
-
-    static ref COMMAND_BUFFER: Mutex<String> = Mutex::new(String::with_capacity(256));
 }
 
+/// Initialise le driver (appelé par main.rs)
 pub fn init() {
-    serial_println!("[KEYBOARD] Driver initialized (AZERTY layout, Set2)");
+    // On peut logger l'init via le port série si besoin
+    crate::serial_println!("[DRIVERS] Keyboard driver initialized (AZERTY)");
 }
 
-fn interpret_command(command: &str) {
-    let command = command.trim();
-    if command.is_empty() { 
-        print!("\n>>> ");
-        return; 
-    }
-
-    println!(""); 
-
-    let mut parts = command.splitn(2, ' ');
-    let cmd = parts.next().unwrap_or("");
-    let args = parts.next().unwrap_or("");
-
-    match cmd {
-        "help" => {
-            println!("Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch");
-        },
-        "info" => {
-            println!("JC-OS v0.2 - Andre Edition");
-            println!("Status: Stable");
-        },
-        "whoami" => {
-            println!("Andre");
-        },
-        "echo" => {
-            println!("{}", args);
-        },
-        "ls" => {
-            let fs = crate::fs::FS.lock();
-            let files = fs.list_files();
-            if files.is_empty() {
-                println!("No files found.");
-            } else {
-                for f in files {
-                    println!("- {}", f);
-                }
-            }
-        },
-        "touch" => {
-            let mut arg_parts = args.splitn(2, ' ');
-            let name = arg_parts.next().unwrap_or("");
-            let content = arg_parts.next().unwrap_or("");
-            if name.is_empty() {
-                println!("Usage: touch <filename> <content>");
-            } else {
-                crate::fs::FS.lock().write_file(name, content);
-                println!("File '{}' saved to RAM.", name);
-            }
-        },
-        "cat" => {
-            if let Some(content) = crate::fs::FS.lock().read_file(args.trim()) {
-                println!("{}", content);
-            } else {
-                println!("Error: File '{}' not found.", args.trim());
-            }
-        },
-        "rm" => {
-            let filename = args.trim();
-            if filename.is_empty() {
-                println!("Usage: rm <filename>");
-            } else {
-                let mut fs = crate::fs::FS.lock();
-                if fs.remove_file(filename) {
-                    println!("File '{}' deleted.", filename);
-                } else {
-                    println!("Error: File '{}' not found.", filename);
-                }
-            }
-        },
-        "edit" => {
-            let mut arg_parts = args.splitn(2, ' ');
-            let name = arg_parts.next().unwrap_or("");
-            let new_content = arg_parts.next().unwrap_or("");
-            
-            if name.is_empty() {
-                println!("Usage: edit <filename> <new_content>");
-            } else {
-                let mut fs = crate::fs::FS.lock();
-                if fs.files.contains_key(name) {
-                    fs.write_file(name, new_content);
-                    println!("File '{}' updated.", name);
-                } else {
-                    println!("Error: File '{}' does not exist.", name);
-                }
-            }
-        },
-        "stats" => {
-            let (file_count, total_bytes) = crate::fs::FS.lock().get_stats();
-            println!("--- SYSTEM STATS ---");
-            println!("Files stored : {}", file_count);
-            println!("Used Memory  : {} bytes", total_bytes);
-            println!("Heap Size    : 100 KB");
-            println!("Buffer Cap   : {} chars", COMMAND_BUFFER.lock().capacity());
-        },
-        "neofetch" => {
-            println!("  _/_/   JC-OS v0.2");
-            println!(" _/      Kernel: Rust 64-bit");
-            println!("_/_/_/   User: Andre");
-        },
-        "clear" => {
-            crate::vga_buffer::clear_screen();
-        },
-        // LE CAS PAR DÉFAUT TOUJOURS À LA FIN
-        _ => {
-            println!("Unknown command: {}", cmd);
-        },
-    }
-    
-    print!("\n>>> ");
-}
-
+/// Ajoute un scancode brut à la machine à états
 pub fn add_scancode(scancode: u8) {
-    match scancode {
-        0xFA | 0xFE | 0xAA | 0x00 => return,
-        _ => {} 
-    }
-    
     let mut keyboard = KEYBOARD.lock();
 
+    // ÉTAPE 1 : On donne TOUJOURS le scancode au décodeur.
+    // C'est ici que le driver voit passer le "KeyUp" du Shift et met à jour son état interne.
     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        let state = key_event.state;
-        let code = key_event.code;
-
-        if state == KeyState::Down {
-            match code {
-                KeyCode::Backspace => {
-                    let mut cmd = COMMAND_BUFFER.lock();
-                    if !cmd.is_empty() {
-                        cmd.pop();
-                        vga_buffer::backspace();
-                    }
-                    return;
-                }
-                KeyCode::Escape => {
-                    COMMAND_BUFFER.lock().clear();
-                    vga_buffer::clear_screen();
-                    print!(">>> ");
-                    return;
-                }
-                _ => {}
+        
+        // ÉTAPE 2 : On ne s'intéresse qu'aux touches que l'on vient d'enfoncer pour le Shell.
+        if key_event.state == KeyState::Down {
+            if let Some(key) = keyboard.process_keyevent(key_event) {
+                // On pousse dans la file
+                let _ = KEY_QUEUE.push(key);
             }
-        }
-
-        if let Some(decoded) = keyboard.process_keyevent(key_event) {
-            if state == KeyState::Down {
-                match decoded {
-                   DecodedKey::Unicode(ch) => {
-    if ch == '\n' || ch == '\r' {
-        // On récupère le contenu et on libère le lock immédiatement après
-        let cmd_to_run = {
-            let mut cmd = COMMAND_BUFFER.lock();
-            let content = cmd.clone(); // On fait une copie pour l'interprète
-            cmd.clear();               // On vide le buffer original
-            content                    // Le lock est relâché ici à la fermeture du bloc }
-        };
-
-        interpret_command(&cmd_to_run);
-    } else {
-        COMMAND_BUFFER.lock().push(ch);
-        vga_buffer::print_char(ch);
-        serial_print!("{}", ch);
-    }
-}
-                    _ => {}
-                }
-            }
+        } else {
+            // ÉTAPE 3 : Pour les touches relâchées (Up), on appelle quand même process_keyevent.
+            // Cela permet au driver de finaliser le changement d'état interne (Majuscules, Alt, etc.)
+            // sans forcément envoyer de caractère au Shell.
+            let _ = keyboard.process_keyevent(key_event);
         }
     }
 }
