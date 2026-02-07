@@ -129,6 +129,7 @@ async fn example_task() {
         crate::task::yield_now().await;
     }
 }
+#[allow(dead_code)]
 async fn message_task() {
     loop {
         for _ in 0..500000 { core::hint::spin_loop(); }

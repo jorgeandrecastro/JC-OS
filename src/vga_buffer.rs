@@ -235,7 +235,7 @@ pub fn backspace() {
         WRITER.lock().backspace();
     });
 }
-
+#[allow(dead_code)]
 pub fn print_char(c: char) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         WRITER.lock().write_byte(c as u8);
