@@ -104,7 +104,7 @@ fn display_screen() {
     writer.clear_screen();
     writer.set_color_code(ColorCode::new(Color::LightCyan, Color::Black));
     writer.write_string("╔════════════════════════════════════════════════════════════════╗\n");
-    writer.write_string("║           JC-OS - BARE METAL KERNEL v0.3 - RUST              ║\n");
+    writer.write_string("║           JC-OS - BARE METAL KERNEL v0.4 - RUST              ║\n");
     writer.write_string("╚════════════════════════════════════════════════════════════════╝\n\n");
     writer.set_color_code(ColorCode::new(Color::White, Color::Black));
     writer.write_string("Digital Sovereignty System \n");

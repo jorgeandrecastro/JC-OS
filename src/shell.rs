@@ -159,7 +159,7 @@ pub fn interpret_command(command: &str) {
     match cmd {
         "help" => {
             println!("Commands: help, info, whoami, clear, stats, neofetch");
-            println!("FS: ls, cd <dir>, mkdir <name>, pwd, touch <file> <text>, cat <file>, rm <file>");
+            println!("FS: look, open <dir>, room <name>, where, note <file> <text>, read <file>, drop <file>");
         },
 
        "useradd" => {
@@ -189,11 +189,11 @@ pub fn interpret_command(command: &str) {
                     let mut fs = crate::fs::FS.lock();
                     
                     // On s'assure que /home existe
-                    let _ = fs.mkdir("home", 0); 
+                    let _ = fs.room("home", 0); 
                     
                     let old_cwd = fs.cwd.clone();
-                    if fs.cd("/home").is_ok() {
-                        if let Err(e) = fs.mkdir(new_username, new_uid) {
+                    if fs.open("/home").is_ok() {
+                        if let Err(e) = fs.room(new_username, new_uid) {
                             println!("[FS ERROR] Could not create home directory: {}", e);
                         } else {
                             println!("[FS] Home directory /home/{} created.", new_username);
@@ -230,7 +230,7 @@ pub fn interpret_command(command: &str) {
                     // 2. Supprimer son home directory
                     let mut fs = crate::fs::FS.lock();
                     let old_cwd = fs.cwd.clone();
-                    if fs.cd("/home").is_ok() {
+                    if fs.open("/home").is_ok() {
                         if fs.remove_file(username_to_del) {
                             println!("[FS] Home directory /home/{} removed.", username_to_del);
                         }
@@ -251,9 +251,9 @@ pub fn interpret_command(command: &str) {
         },
 
         "edit" => {
-    let mut arg_parts = args.splitn(2, ' ');
-    let file_name = arg_parts.next().unwrap_or("");
-    let new_content = arg_parts.next().unwrap_or("");
+        let mut arg_parts = args.splitn(2, ' ');
+        let file_name = arg_parts.next().unwrap_or("");
+        let new_content = arg_parts.next().unwrap_or("");
 
     if file_name.is_empty() {
         println!("Usage: edit <filename> <text>");
@@ -268,14 +268,14 @@ pub fn interpret_command(command: &str) {
     }
 },
 
-        "pwd" => {
+        "where" => {
             let fs = crate::fs::FS.lock();
             println!("/{}", fs.cwd.join("/"));
         },
 
-        "ls" => {
+        "look" => {
             let fs = crate::fs::FS.lock();
-            let entries = fs.ls();
+            let entries = fs.look();
             if entries.is_empty() {
                 println!("Empty directory.");
             } else {
@@ -288,33 +288,33 @@ pub fn interpret_command(command: &str) {
                 }
             }
         },
-        "cd" => {
+        "open" => {
             if args.is_empty() {
-                println!("Usage: cd <directory>");
+                println!("Usage: open <directory>");
             } else {
-                if let Err(e) = crate::fs::FS.lock().cd(args) {
+                if let Err(e) = crate::fs::FS.lock().open(args) {
                     println!("Error: {}", e);
                 }
             }
         },
 
-        "mkdir" => {
+        "room" => {
             if args.is_empty() {
-                println!("Usage: mkdir <name>");
+                println!("Usage: room <name>");
             } else {
                 // On passe bien 2 arguments : le nom et l'UID
-                if let Err(e) = crate::fs::FS.lock().mkdir(args, current_uid) {
+                if let Err(e) = crate::fs::FS.lock().room(args, current_uid) {
                     println!("Error: {}", e);
                 }
             }
         },
 
-       "touch" => {
+       "note" => {
             let mut arg_parts = args.splitn(2, ' ');
             let name = arg_parts.next().unwrap_or("");
             let content = arg_parts.next().unwrap_or("");
             if name.is_empty() {
-                println!("Usage: touch <filename> <content>");
+                println!("Usage: note <filename> <content>");
             } else {
                 // On utilise le Result et on passe l'UID
                 if let Err(e) = crate::fs::FS.lock().write_file(name, content, current_uid) {
@@ -325,10 +325,10 @@ pub fn interpret_command(command: &str) {
             }
         },
 
-        "rm" => {
+        "drop" => {
             let filename = args.trim();
             if filename.is_empty() {
-                println!("Usage: rm <filename>");
+                println!("Usage: drop <filename>");
             } else {
                 let mut fs = crate::fs::FS.lock();
                 if fs.remove_file(filename) {
@@ -338,7 +338,7 @@ pub fn interpret_command(command: &str) {
                 }
             }
         },
-        "cat" => {
+        "read" => {
             let filename = args.trim();
             // Attention : read_file dans le FS pro doit être mis à jour pour chercher dans le CWD
             // Pour l'instant, on utilise la logique simplifiée
@@ -362,7 +362,7 @@ pub fn interpret_command(command: &str) {
         },
 
         "neofetch" => {
-            println!("   _/_/    JC-OS v0.3 Pro");
+            println!("   _/_/    JC-OS v0.4 Pro");
             println!("  _/       User: {}", crate::auth::AUTH.lock().get_current_username());
             println!(" _/_/_/    FS  : Hierarchical RAMFS");
         },

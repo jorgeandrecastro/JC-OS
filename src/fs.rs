@@ -76,7 +76,7 @@ impl RamFileSystem {
         curr
     }
 
-    pub fn ls(&self) -> Vec<(String, NodeType)> {
+    pub fn look(&self) -> Vec<(String, NodeType)> {
         let current_dir = self.get_current_dir();
         current_dir.entries.iter()
             .map(|(name, node)| {
@@ -116,10 +116,10 @@ impl RamFileSystem {
         current_dir.entries.remove(name).is_some()
     }
 
-    pub fn mkdir(&mut self, name: &str, uid: u32) -> Result<(), &str> {
+    pub fn room(&mut self, name: &str, uid: u32) -> Result<(), &str> {
         let current_dir = self.get_current_dir_mut();
         if current_dir.entries.contains_key(name) {
-            return Err("Le nom existe déjà");
+            return Err("The name already exists");
         }
         let new_dir = FsNode::Directory(Directory {
             inode: Inode { uid, permissions: 0o755, node_type: NodeType::Directory },
@@ -129,7 +129,7 @@ impl RamFileSystem {
         Ok(())
     }
 
-    pub fn cd(&mut self, path: &str) -> Result<(), &str> {
+    pub fn open(&mut self, path: &str) -> Result<(), &str> {
         match path {
             "/" => { self.cwd.clear(); Ok(()) },
             ".." => { self.cwd.pop(); Ok(()) },
@@ -139,7 +139,7 @@ impl RamFileSystem {
                     self.cwd.push(path.to_string());
                     Ok(())
                 } else {
-                    Err("Dossier introuvable")
+                    Err(" Not a directory or does not exist")
                 }
             }
         }
