@@ -162,6 +162,80 @@ pub fn interpret_command(command: &str) {
             println!("FS: look, open <dir>, room <name>, where, note <file> <text>, read <file>, drop <file>");
         },
 
+"type" => {
+    let file_name = args.trim();
+    if file_name.is_empty() {
+        println!("Usage: type <filename>");
+    } else {
+        // --- ÉTAPE 1 : SAUVEGARDE TOTALE (Écran + Curseur) ---
+        let old_state = crate::vga_buffer::WRITER.lock().save_screen();
+
+        // --- INITIALISATION DE L'INTERFACE ---
+        crate::vga_buffer::clear_screen();
+        
+        {
+            let mut writer = crate::vga_buffer::WRITER.lock();
+            writer.set_color_code(crate::vga_buffer::ColorCode::new(
+                crate::vga_buffer::Color::DarkGray, 
+                crate::vga_buffer::Color::Black
+            ));
+            
+            let header = format!(" TYPE : {}  (Ctrl+S to save, Ctrl+Q to exit)", file_name);
+            for (i, b) in header.bytes().enumerate() {
+                writer.write_byte_at(b, 0, i);
+            }
+            
+            writer.set_color_code(crate::vga_buffer::ColorCode::new(
+                crate::vga_buffer::Color::White, 
+                crate::vga_buffer::Color::Black
+            ));
+            writer.row_position = 2; // On commence à écrire ici
+            writer.column_position = 0;
+            writer.update_cursor();
+        }
+
+        let mut content = String::new();
+        if let Some(existing) = crate::fs::FS.lock().read_file(file_name) {
+            content = existing;
+            print!("{}", content);
+        }
+
+        // --- BOUCLE D'ÉDITION INTERACTIVE ---
+        loop {
+            if let Some(key) = crate::drivers::keyboard::KEY_QUEUE.pop() {
+                match key {
+                    // Ctrl+Q : Quitter et RESTAURER l'état précédent
+                    pc_keyboard::DecodedKey::Unicode('\u{0011}') => {
+                        crate::vga_buffer::WRITER.lock().restore_screen(&old_state);
+                        break; 
+                    }
+                    
+                    // Ctrl+S : Sauvegarder
+                    pc_keyboard::DecodedKey::Unicode('\u{0013}') => {
+                        let uid = crate::auth::AUTH.lock().get_current_uid();
+                        let mut fs = crate::fs::FS.lock();
+                        let _ = fs.write_file(file_name, &content, uid);
+                    }
+                    
+                    pc_keyboard::DecodedKey::Unicode('\u{08}') => {
+                        if !content.is_empty() {
+                            content.pop();
+                            crate::vga_buffer::backspace();
+                        }
+                    }
+                    
+                    pc_keyboard::DecodedKey::Unicode(c) => {
+                        print!("{}", c);
+                        content.push(c);
+                    }
+                    _ => {}
+                }
+            }
+            x86_64::instructions::hlt();
+        }
+    }
+}
+
        "useradd" => {
     // --- VÉRIFICATION DE SÉCURITÉ ---
     let is_admin = {
@@ -361,12 +435,14 @@ pub fn interpret_command(command: &str) {
             println!("Used Space    : {} bytes", total_bytes);
         },
 
-        "neofetch" => {
-            println!("   _/_/    JC-OS v0.4 Pro");
-            println!("  _/       User: {}", crate::auth::AUTH.lock().get_current_username());
-            println!(" _/_/_/    FS  : Hierarchical RAMFS");
-        },
-
+       "neofetch" => {
+    let time = crate::drivers::rtc::get_time();// On récupère l'heure corrigée (été/hiver)
+    println!("   _/_/    JC-OS v0.4 - Rust Edition");
+    println!("  _/       User : {}", crate::auth::AUTH.lock().get_current_username());
+    println!(" _/_/_/    FS   : Hierarchical RAMFS");
+    println!("           Time : {:02}:{:02}:{:02}", time.hours, time.minutes, time.seconds);
+    println!("           CPU  : x86_64 Bare Metal");
+},
         _ => println!("Unknown command: {}", cmd),
     }
 }

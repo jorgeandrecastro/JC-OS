@@ -12,7 +12,7 @@ lazy_static! {
         Mutex::new(Keyboard::new(
             ScancodeSet2::new(),
             layouts::Azerty,
-            HandleControl::Ignore
+           HandleControl::MapLettersToUnicode
         ));
 }
 
@@ -21,26 +21,22 @@ pub fn init() {
     // On peut logger l'init via le port série si besoin
     crate::serial_println!("[DRIVERS] Keyboard driver initialized (AZERTY)");
 }
-
-/// Ajoute un scancode brut à la machine à états
+/// Ajoute un scancode brut à la machine à états (Version corrigée pour Ctrl)
 pub fn add_scancode(scancode: u8) {
     let mut keyboard = KEYBOARD.lock();
 
-    // ÉTAPE 1 : On donne TOUJOURS le scancode au décodeur.
-    // C'est ici que le driver voit passer le "KeyUp" du Shift et met à jour son état interne.
     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        
-        // ÉTAPE 2 : On ne s'intéresse qu'aux touches que l'on vient d'enfoncer pour le Shell.
-        if key_event.state == KeyState::Down {
-            if let Some(key) = keyboard.process_keyevent(key_event) {
-                // On pousse dans la file
+        // ÉTAPE 1 : On mémorise l'état AVANT que l'événement ne soit déplacé
+        let is_down = key_event.state == KeyState::Down;
+
+        // ÉTAPE 2 : On donne l'événement au décodeur (le 'move' se produit ici)
+        let key = keyboard.process_keyevent(key_event);
+
+        // ÉTAPE 3 : On utilise notre variable mémorisée
+        if is_down {
+            if let Some(key) = key {
                 let _ = KEY_QUEUE.push(key);
             }
-        } else {
-            // ÉTAPE 3 : Pour les touches relâchées (Up), on appelle quand même process_keyevent.
-            // Cela permet au driver de finaliser le changement d'état interne (Majuscules, Alt, etc.)
-            // sans forcément envoyer de caractère au Shell.
-            let _ = keyboard.process_keyevent(key_event);
         }
     }
 }

@@ -13,6 +13,7 @@ use x86_64::VirtAddr;
 use crate::executor::Executor;
 use crate::task::Task;
 
+
 mod vga_buffer;
 mod serial;
 mod interrupts;
@@ -25,6 +26,7 @@ mod shell; // Important: link the new shell
 mod auth;// Important: link the new authentication module
 pub mod task;
 pub mod executor;
+
 
 
 entry_point!(kernel_main);
@@ -129,33 +131,21 @@ async fn example_task() {
         crate::task::yield_now().await;
     }
 }
-#[allow(dead_code)]
-async fn message_task() {
-    loop {
-        for _ in 0..500000 { core::hint::spin_loop(); }
-        serial_println!("Je suis la tache A");
-        crate::task::yield_now().await;
-        
-        for _ in 0..500000 { core::hint::spin_loop(); }
-        serial_println!("Je suis la tache B");
-        crate::task::yield_now().await;
-    }
-}
+
 // Tâche pour afficher l'horloge en temps réel
 async fn clock_task() {
-    let mut last_second = 255; // Valeur impossible pour forcer le premier affichage
+    let mut last_second = 255;
 
     loop {
-        let time = crate::drivers::rtc::get_time();
+        // Changement du chemin vers crate::rtc::get_time()
+        let time = crate::drivers::rtc::get_time(); // <--- VERIFIE CE CHEMIN
         
-        // On ne rafraîchit l'écran que si la seconde a changé
         if time.seconds != last_second {
             let mut writer = crate::vga_buffer::WRITER.lock();
             writer.write_clock(time.hours, time.minutes, time.seconds);
             last_second = time.seconds;
         }
 
-        // On rend la main. L'Executor repassera nous voir très vite.
         crate::task::yield_now().await;
     }
 }

@@ -191,7 +191,7 @@ impl Writer {
         self.write_digit_at(seconds % 10, row, col + 7);
     }
     // À ajouter dans impl Writer
-fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
+pub fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
     let color_code = self.color_code;
     self.buffer.chars[row][col].write(ScreenChar {
         ascii_character: byte,
@@ -260,4 +260,41 @@ pub fn _print(args: fmt::Arguments) {
         let mut writer = WRITER.lock();
         writer.write_fmt(args).unwrap();
     });
+}
+pub struct ScreenState {
+    pub chars: [u8; 4000],
+    pub row: usize,
+    pub col: usize,
+}
+
+impl Writer {
+    pub fn save_screen(&self) -> ScreenState {
+        let mut data = [0u8; 4000];
+        for row in 0..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                let char = self.buffer.chars[row][col].read();
+                let index = (row * BUFFER_WIDTH + col) * 2;
+                data[index] = char.ascii_character;
+                data[index + 1] = char.color_code.0;
+            }
+        }
+        // On sauvegarde l'état complet
+        ScreenState { chars: data, row: self.row_position, col: self.column_position }
+    }
+
+    pub fn restore_screen(&mut self, state: &ScreenState) {
+        for row in 0..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                let index = (row * BUFFER_WIDTH + col) * 2;
+                self.buffer.chars[row][col].write(ScreenChar {
+                    ascii_character: state.chars[index],
+                    color_code: ColorCode(state.chars[index + 1]),
+                });
+            }
+        }
+        // On restaure la position EXACTE
+        self.row_position = state.row;
+        self.column_position = state.col;
+        self.update_cursor();
+    }
 }
