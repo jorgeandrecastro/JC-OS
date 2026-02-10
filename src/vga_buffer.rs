@@ -190,7 +190,7 @@ impl Writer {
         self.write_digit_at(seconds / 10, row, col + 6);
         self.write_digit_at(seconds % 10, row, col + 7);
     }
-    // À ajouter dans impl Writer
+    
 pub fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
     let color_code = self.color_code;
     self.buffer.chars[row][col].write(ScreenChar {

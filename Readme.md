@@ -14,10 +14,12 @@ This project demonstrates the fundamentals of OS creation:
 - Hardware interrupt handling
 - Virtual memory with paging
 - Dynamic memory allocation (heap)
-- RAM-based file system with interactive shell
+- Hierarchical file system with directories and permissions
+- Interactive shell with real-time clock display
 - Async/await task scheduling with executor
-- Real-time clock (RTC) for time keeping
-- User authentication with role-based access control
+- User management with UID system
+- Automatic timezone support (Europe/France)
+- PS/2 mouse driver (in development)
 
 ## ✨ Implemented Features
 
@@ -37,9 +39,14 @@ This project demonstrates the fundamentals of OS creation:
 - **Command buffer** with 256 character capacity
 
 ### File System
-- **RAM File System (RAMFS)** - In-memory file storage
-- **BTreeMap-based organization** for efficient file lookup
-- **File operations**: create, read, write, delete, list
+- **Hierarchical RAM File System** - Multi-level directory structure
+- **Inode-based design** with UID and permissions
+- **Current Working Directory (CWD)** navigation
+- **Directory operations**: look, open, room (create directory)
+- **File operations**: touch, cat, read, edit, note, drop
+- **Path navigation**: absolute and relative paths
+- **Automatic home directory creation** for new users
+- **BTreeMap-based organization** for efficient lookup
 - **Statistics tracking**: file count and total size
 - **Unicode support** via UTF-8 lossless conversion
 
@@ -50,18 +57,33 @@ This project demonstrates the fundamentals of OS creation:
 - **Utility commands**: help, echo, clear, ls
 - **Secure login system** with authentication
 
-### User Authentication
+### User Authentication & Management
 - **Role-based access control** with Admin and Standard roles
 - **User management** with login/logout functionality
+- **Dynamic user creation** with `useradd` command (Admin only)
+- **User deletion** with `userdel` command (Admin only)
+- **UID system** for user identification
 - **Session tracking** with current user identification
 - **Password authentication** with credential validation
+- **Automatic home directory creation** for new users
 - **Default admin account**: username "andre", password "admin123"
 
 ### Real-Time Clock (RTC)
 - **CMOS RTC access** via ports 0x70/0x71
 - **BCD to decimal conversion** for accurate time reading
 - **Time struct** with hours, minutes, seconds
+- **Automatic timezone adjustment** for France (UTC+1/+2)
+- **Daylight Saving Time (DST)** support with European rules
 - **Non-volatile time keeping** independent of system power
+
+### PS/2 Mouse Driver
+- **PS/2 mouse interface** via ports 0x60/0x64
+- **3-byte packet protocol** for movement and button data
+- **Movement delta calculation** with sign extension
+- **Cursor position tracking** with screen boundary clamping
+- **Mouse state management** with phase-based packet decoding
+- **Auxiliary port enablement** for mouse device
+- **Data reporting activation** for real-time input
 
 ### Task Scheduling
 - **Async/await support** with Rust futures
@@ -77,8 +99,9 @@ This project demonstrates the fundamentals of OS creation:
 - **IDT** (Interrupt Descriptor Table) - Interrupt vectors
 - **PIC 8259** - Programmable Interrupt Controller
 - **Double Fault Handler** protected by IST (Interrupt Stack Table)
-- **Timer Interrupt** - Hardware timer (IRQ0) for future scheduling
+- **Timer Interrupt** - Hardware timer (IRQ0) for real-time clock display
 - **Keyboard Interrupt** - PS/2 keyboard input handling
+- **Mouse Interrupt** - PS/2 mouse input handling (IRQ12)
 
 ### Memory Management
 - **x86_64 Paging** (4-level page tables)
@@ -100,10 +123,10 @@ This project demonstrates the fundamentals of OS creation:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              JC-OS Kernel v0.3                   │
+│              JC-OS Kernel v0.4                   │
 │              Andre Edition                       │
 ├─────────────────────────────────────────────────┤
-│  Entry Point: kernel_main()                      │
+│  Entry Point: kernel_main()                     │
 ├─────────────────────────────────────────────────┤
 │  ┌───────────────────────────────────────────┐  │
 │  │           Initialization Order            │  │
@@ -111,17 +134,18 @@ This project demonstrates the fundamentals of OS creation:
 │  │  1. GDT + TSS     (CPU segmentation)      │  │
 │  │  2. IDT           (interrupt table)       │  │
 │  │  3. PIC           (interrupt controller)  │  │
-│  │  4. PS/2 Controller (keyboard)            │  │
-│  │  5. Keyboard Driver (AZERTY Set2)         │  │
-│  │  6. Paging Setup  (4-level page tables)   │  │
-│  │  7. Frame Allocator (memory map parsing)  │  │
-│  │  8. Heap Init      (100 KiB allocator)    │  │
-│  │  9. File System    (RAMFS initialization) │  │
-│  │  10. Auth System    (user management)     │  │
-│  │  11. RTC Driver     (time keeping)        │  │
-│  │  12. Task System    (Executor init)       │  │
-│  │  13. Interrupts enabled                   │  │
-│  │  14. UI Launch     (shell prompt)         │  │
+│  │  4. PS/2 Controller (keyboard+mouse)     │  │
+│  │  5. Keyboard Driver (AZERTY Set2)        │  │
+│  │  6. Paging Setup  (4-level page tables)  │  │
+│  │  7. Frame Allocator (memory map parsing) │  │
+│  │  8. Heap Init      (100 KiB allocator)   │  │
+│  │  9. File System    (Hierarchical RAMFS)  │  │
+│  │  10. Auth System    (user management)    │  │
+│  │  11. RTC Driver     (time+timezone)     │  │
+│  │  12. Mouse Driver   (PS/2 input)        │  │
+│  │  13. Task System    (Executor init)     │  │
+│  │  14. Interrupts enabled                  │  │
+│  │  15. UI Launch     (shell prompt)        │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │  Memory Layout (Virtual Address Space)          │
@@ -150,30 +174,59 @@ This project demonstrates the fundamentals of OS creation:
 │  │  └── poll() → Pending/Ready               │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
-│  Authentication Architecture                     │
+│  Authentication & User Management               │
 │  ┌───────────────────────────────────────────┐  │
 │  │  AuthManager                               │  │
 │  │  ├── users: Vec<User>                     │  │
 │  │  ├── current_user: Option<User>           │  │
-│  │  ├── login(username, password) -> bool    │  │
+│  │  ├── next_uid: u32                        │  │
+│  │  ├── login(username, password) -> bool   │  │
 │  │  ├── logout()                             │  │
-│  │  └── get_current_username() -> String     │  │
+│  │  ├── add_user(username, pass) -> uid      │  │
+│  │  ├── delete_user(username) -> Result      │  │
+│  │  └── get_current_uid() -> u32             │  │
 │  │                                            │  │
 │  │  User                                      │  │
 │  │  ├── username: String                     │  │
 │  │  ├── password_hash: String                │  │
-│  │  └── role: Role (Admin/Standard)          │  │
+│  │  ├── role: Role (Admin/Standard)          │  │
+│  │  └── uid: u32                             │  │
 │  │                                            │  │
 │  │  Role Enum                                │  │
 │  │  ├── Admin     - Full system access       │  │
 │  │  └── Standard  - Limited access           │  │
 │  └───────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────┤
+│  Hierarchical File System Architecture          │
+│  ┌───────────────────────────────────────────┐  │
+│  │  RamFileSystem                            │  │
+│  │  ├── root: Directory                      │  │
+│  │  ├── cwd: Vec<String>                     │  │
+│  │  ├── look() -> Vec<(name, type)>         │  │
+│  │  ├── open(path) -> Result                 │  │
+│  │  ├── room(name, uid) -> Result            │  │
+│  │  ├── write_file(name, content, uid)       │  │
+│  │  └── read_file(name) -> Option<String>    │  │
+│  │                                            │  │
+│  │  Directory                                 │  │
+│  │  ├── inode: Inode                         │  │
+│  │  └── entries: BTreeMap<String, FsNode>    │  │
+│  │                                            │  │
+│  │  Inode                                     │  │
+│  │  ├── uid: u32                             │  │
+│  │  ├── permissions: u16                      │  │
+│  │  └── node_type: File/Directory            │  │
+│  │                                            │  │
+│  │  FsNode Variants                          │  │
+│  │  ├── File(File)                           │  │
+│  │  └── Directory(Directory)                 │  │
+│  └───────────────────────────────────────────┘  │
+├─────────────────────────────────────────────────┤
 │  Managed Peripherals:                           │
 │  • VGA 0xB8000  - Text screen                  │
 │  • COM1 0x3F8   - Serial port                  │
 │  • PIC 0x20/0xA0 - Interrupt controller        │
-│  • PS/2 0x60/0x64 - Keyboard                   │
+│  • PS/2 0x60/0x64 - Keyboard + Mouse           │
 │  • PIT 0x40     - Programmable Interval Timer  │
 │  • RTC 0x70/0x71 - Real Time Clock (CMOS)      │
 └─────────────────────────────────────────────────┘
@@ -282,21 +335,44 @@ Memory Statistics (displayed at boot):
 • Status     : DYNAMIC ALLOCATION OK
 ```
 
-### 5. RAM File System (`src/fs.rs`)
-**Role**: In-memory file storage and management
+### 5. Hierarchical RAM File System (`src/fs.rs`)
+**Role**: Hierarchical in-memory file storage with directories and permissions
 
 ```
 Structure:
-• File: name (String) + data (Vec<u8>)
-• RamFileSystem: BTreeMap<String, File>
+• Inode: uid, permissions, node_type (File/Directory)
+• File: inode + data (Vec<u8>)
+• Directory: inode + entries (BTreeMap<String, FsNode>)
+• RamFileSystem: root Directory + cwd (current working directory)
 • Global instance protected by Mutex
 
+FsNode Enum:
+• File(File) - Regular file with content
+• Directory(Directory) - Container for other nodes
+
 Features:
-• write_file(name, content) - Create/overwrite files
-• read_file(name) - Read file as String (returns Option)
-• list_files() - Returns Vec<String> of all filenames
-• remove_file(name) - Delete file (returns bool)
-• get_stats() - Returns (file_count, total_bytes)
+• Hierarchical Structure:
+  - Root directory "/" as entry point
+  - Current Working Directory (CWD) navigation
+  - open(path) - Navigate to directory
+  - look() - List current directory contents
+  - room(name, uid) - Create new directory
+
+• File Operations:
+  - write_file(name, content, uid) - Create/overwrite with UID tracking
+  - read_file(name) - Read file as String (returns Option)
+  - remove_file(name) - Delete file/directory (returns bool)
+  - get_stats() - Returns (file_count, total_bytes)
+
+• Path Navigation:
+  - "/" - Return to root
+  - ".." - Go up one level
+  - name - Enter subdirectory
+
+• Security:
+  - UID tracking for file ownership
+  - Permission flags (0o644 for files, 0o755 for directories)
+  - Home directory auto-creation for new users
 
 Storage:
 • In-memory only (volatile)
@@ -304,42 +380,61 @@ Storage:
 • No persistence (data lost on reboot)
 ```
 
-### 6. User Authentication (`src/auth.rs`)
-**Role**: User management and access control
+### 6. User Authentication & Management (`src/auth.rs`)
+**Role**: User management, authentication, and access control
 
 ```
 Structure:
 • Role Enum: Admin, Standard
-• User: username, password_hash, role
-• AuthManager: users Vec, current_user Option
+• User: username, password_hash, role, uid
+• AuthManager: users Vec, current_user Option, next_uid u32
 
 Features:
 • login(username, password) -> bool
   - Authenticates user credentials
   - Case-insensitive username matching
   - Returns true on successful authentication
+  - Sets current_user session
 
 • logout()
   - Clears current user session
   - Sets current_user to None
 
+• add_user(username, password) -> Result<u32, &str>
+  - Creates new user with Standard role
+  - Assigns unique UID (starting from 1000)
+  - Prevents duplicate usernames
+  - Returns new UID on success
+
+• delete_user(username) -> Result<(), &str>
+  - Removes user from system
+  - Protects primary admin account
+  - Prevents deleting current user
+  - Returns error if user not found
+
 • get_current_username() -> String
   - Returns current username or "Guest" if not logged in
 
+• get_current_uid() -> u32
+  - Returns current user's UID
+  - Returns 1000 for Guest
+
 • Role-based access control
-  - Admin: Full system access
-  - Standard: Limited permissions (future)
+  - Admin: Full system access, user management
+  - Standard: Limited permissions
 
 Default User:
 • Username: "andre"
 • Password: "admin123"
 • Role: Admin
+• UID: 0
 
 Security Features:
 • Password masking during input
 • Session management
 • Credential validation
 • Case-insensitive username matching
+• Admin-only user management operations
 
 Lazy Static Initialization:
 • AUTH: Mutex<AuthManager> for thread-safe access
@@ -347,7 +442,7 @@ Lazy Static Initialization:
 ```
 
 ### 7. Real-Time Clock (`src/drivers/rtc.rs`)
-**Role**: CMOS RTC access for time keeping
+**Role**: CMOS RTC access for time keeping with automatic timezone
 
 ```
 Hardware Interface:
@@ -368,22 +463,83 @@ Functions:
 
 • get_time() -> RtcTime
   - Reads registers 0x00 (seconds), 0x02 (minutes), 0x04 (hours)
+  - Reads date registers 0x07 (day), 0x08 (month), 0x09 (year)
   - Converts BCD to decimal
-  - Returns RtcTime struct
+  - Applies timezone adjustment (France UTC+1/+2)
+  - Returns RtcTime struct with corrected time
 
 BCD Conversion:
 • BCD = (value & 0x0F) + ((value / 16) * 10)
 • Extracts low nibble and high nibble
 • Combines for correct decimal value
 
+Timezone Support:
+• Automatic adjustment for France timezone
+• Summer time (DST): UTC+2 (March-October)
+• Winter time: UTC+1 (November-February)
+• DST calculated using European rules (last Sunday of March/October)
+
 Features:
 • Battery-backed time keeping (independent of power)
 • Standard CMOS RTC chip compatible
 • 24-hour format support
 • No interrupts required for reading
+• Real-time clock display in shell (updated every second)
 ```
 
-### 8. Task Management (`src/task.rs`)
+### 8. PS/2 Mouse Driver (`src/drivers/mouse.rs`)
+**Role**: PS/2 mouse input handling for cursor tracking
+
+```
+Hardware Interface:
+• Command Port: 0x64 (PS/2 controller)
+• Data Port: 0x60 (keyboard/mouse data)
+• Auxiliary Port: Enabled via command 0xA8
+
+MouseState Structure:
+• phase: u8 - Packet decoding phase (0-2)
+• buffer: [u8; 3] - Raw packet data
+• x, y: i32 - Current cursor position
+• old_x, old_y: i32 - Previous position for rendering
+
+Packet Protocol (3 bytes):
+• Byte 0: Flags (bit 0=Left, 1=Right, 2=Middle, 3=Always 1, 4=X sign, 5=Y sign, 6=X overflow, 7=Y overflow)
+• Byte 1: X movement delta (signed)
+• Byte 2: Y movement delta (signed)
+
+Functions:
+• init() - Initialize mouse controller
+  - Enables auxiliary port
+  - Configures interrupt enable
+  - Sets bit default mouse parameters
+  - Enables data reporting
+
+• add_mouse_data(data: u8) - Process incoming mouse data
+  - Phase-based packet decoding
+  - Movement delta calculation with sign extension
+  - Position clamping to screen bounds (0-79 for X, 0-24 for Y)
+  - Cursor rendering
+
+• draw_cursor(x, y, old_x, old_y) - Render mouse cursor
+  - Tracks cursor position changes
+  - Prepares for visual cursor display
+
+Features:
+• 3-byte packet protocol standard
+• Movement delta with sign extension
+• Screen boundary clamping
+• Button state tracking (left, right, middle)
+• Real-time position updates
+• Auxiliary port communication
+• Data reporting enable/disable
+
+Status:
+• Driver initialized and functional
+• Cursor position tracking implemented
+• Visual cursor rendering prepared
+```
+
+### 9. Task Management (`src/task.rs`)
 **Role**: Async task structures and cooperative multitasking
 
 ```
@@ -598,15 +754,16 @@ qemu-system-x86_64 \
 
 ## 🔐 Login Credentials
 
-By default, JC-OS v0.3 includes a secure login system:
+By default, JC-OS v0.4 includes a secure login system:
 
 ```
 Username: andre
 Password: admin123
 Role: Admin
+UID: 0
 ```
 
-**Note**: The first time you run JC-OS v0.3, you will be presented with a login screen. Use the default credentials above to access the shell.
+**Note**: The first time you run JC-OS v0.4, you will be presented with a login screen. Use the default credentials above to access the shell. Administrators can create new users using the `useradd` command.
 
 ## ⌨️ Shell Commands
 
@@ -616,26 +773,41 @@ Role: Admin
 |---------|-------------|
 | (Login) | Enter username and password at startup |
 | whoami  | Display current authenticated user |
-| logout  | End current session (future) |
-| passwd  | Change password (future) |
+| logout  | End current session |
+| useradd | Create new user (Admin only) |
+| userdel | Delete user (Admin only) |
 
 ### File Management
 
 | Command | Description | Usage |
 |---------|-------------|-------|
+| `look` | List directory contents | `look` |
+| `open` | Change directory | `open <directory>` |
+| `room` | Create directory | `room <name>` |
+| `where` | Show current path | `where` |
+| `note` | Create file with content | `note <filename> <content>` |
+| `read` | Read file content | `read <filename>` |
+| `drop` | Delete file/directory | `drop <filename>` |
 | `touch` | Create new file | `touch <filename> <content>` |
 | `cat` | Read file content | `cat <filename>` |
-| `rm` | Delete file | `rm <filename>` |
 | `edit` | Modify file | `edit <filename> <new_content>` |
-| `ls` | List all files | `ls` |
+| `type` | Interactive file editor | `type <filename>` |
+
+### Navigation
+
+| Command | Description |
+|---------|-------------|
+| `/` | Go to root directory |
+| `..` | Go up one directory level |
+| `directory_name` | Enter subdirectory |
 
 ### System Information
 
 | Command | Description | Output Example |
 |---------|-------------|----------------|
-| `info` | Display system info | JC-OS v0.3 - Andre Edition |
+| `info` | Display system info | JC-OS v0.4 - Andre Edition |
 | `whoami` | Display current user | andre |
-| `date` | Display current time | Time: 14:30:45 |
+| `date` | Display current time (timezone adjusted) | Time: 14:30:45 |
 | `stats` | Show filesystem stats | Files: 3, Memory: 256 bytes |
 | `neofetch` | ASCII system info | Art + system details |
 
@@ -649,6 +821,13 @@ Role: Admin
 | `Enter` | Execute command |
 | `Backspace` | Delete previous character |
 | `Esc` | Clear buffer + reset screen |
+
+### Editor Shortcuts (type command)
+
+| Shortcut | Description |
+|----------|-------------|
+| Ctrl+S | Save file |
+| Ctrl+Q | Quit editor |
 
 ## 🔍 Example Session
 
@@ -664,12 +843,13 @@ qemu-system-x86_64 -drive format=raw,file=target/x86_64-jc-os/debug/bootimage-jc
 [PAGING] 4-Level page tables initialized
 [FRAMES] Boot info frame allocator ready
 [SYSTEM] Heap Allocator Ready
-[FS] RAM File System initialized
+[FS] RAM File System initialized (Hierarchical)
 [AUTH] Authentication system initialized
-[RTC] Real Time Clock initialized
+[RTC] Real Time Clock initialized (Timezone: Europe/Paris)
+[MOUSE] PS/2 Mouse driver initialized
 [EXECUTOR] Task scheduler ready
 
- JC-OS - BARE METAL KERNEL v0.3 - RUST EDITION
+ JC-OS - BARE METAL KERNEL v0.4 - RUST EDITION
 
 --- LOGIN REQUIRED ---
 Username: andre
@@ -677,47 +857,65 @@ Password: ********
 Welcome back, andre!
 
 Digital Sovereignty System
-File System: READY (RAMFS) | Commands examples: touch, ls, cat, rm, edit
+File System: READY (Hierarchical RAMFS) | Try: look, open, room, where
 Task Scheduling: READY | Async/Await supported
 Authentication: ENABLED | Session active
 
-andre@jc-os:~$ help
-Commands: help, info, stats, echo, whoami, ls, touch, cat, rm, edit, clear, neofetch, date
+andre@jc-os:/$ help
+Commands: help, info, stats, echo, whoami, look, open, room, where, note, read, drop, type, useradd, userdel, date, neofetch
 
-andre@jc-os:~$ date
-Time: 14:30:45
+andre@jc-os:/$ date
+Time: 14:30:45 (UTC+2, Summer Time)
 
-andre@jc-os:~$ touch hello.txt "Hello JC-OS!"
-File 'hello.txt' saved to RAM.
+andre@jc-os:/$ room home
+Directory 'home' created.
 
-andre@jc-os:~$ touch test.txt "This is a test"
-File 'test.txt' saved to RAM.
+andre@jc-os:/$ open home
+andre@jc-os:/home$
 
-andre@jc-os:~$ ls
-- hello.txt
-- test.txt
+andre@jc-os:/home$ room andre
+Directory 'andre' created.
 
-andre@jc-os:~$ cat hello.txt
-Hello JC-OS!
+andre@jc-os:/home$ note welcome.txt "Welcome to JC-OS!"
+File 'welcome.txt' created.
 
-andre@jc-os:~$ stats
+andre@jc-os:/home$ look
+andre/
+welcome.txt
+
+andre@jc-os:/home$ where
+/home
+
+andre@jc-os:/home$ open andre
+andre@jc-os:/home/andre$
+
+andre@jc-os:/home/andre$ type test.txt
+[TYPE: test.txt] (Ctrl+S to save, Ctrl+Q to exit)
+Hello from interactive editor!
+
+andre@jc-os:/home/andre$ useradd john secret123
+[AUTH] User 'john' created with UID 1000.
+[FS] Home directory /home/john created.
+
+andre@jc-os:/home/andre$ stats
 --- SYSTEM STATS ---
-Files stored : 2
-Used Memory  : 21 bytes
-Heap Size    : 100 KB
-Buffer Cap   : 256 chars
+Files/Folders : 2
+Used Space    : 25 bytes
 
-andre@jc-os:~$ neofetch
-  _/_/   JC-OS v0.3
- _/      Kernel: Rust 64-bit
-_/_/_/   User: andre
+andre@jc-os:/home/andre$ neofetch
+  _/_/   JC-OS v0.4 - Rust Edition
+ _/      User : andre
+_/_/_/    FS   : Hierarchical RAMFS
+           Time : 14:30:45
 
-andre@jc-os:~$ whoami
-andre
+andre@jc-os:/home/andre$ where
+/home/andre
 
-andre@jc-os:~$ clear
+andre@jc-os:/home/andre$ logout
 
-andre@jc-os:~$
+--- LOGIN REQUIRED ---
+Username: andre
+Password: ********
 ```
 
 ## 📦 Cargo Dependencies
@@ -785,7 +983,7 @@ Verify executor is initialized and run() is called in main loop
 
 ## 🔮 Future Improvements
 
-- [ ] **PS/2 Mouse Driver** - On-screen cursor tracking and click events
+- [ ] **Mouse Integration** - Full cursor rendering, click events, GUI interaction
 - [ ] **Page Fault Handler** - Better memory error reporting and debugging
 - [ ] **Kernel Heap Expansion** - Dynamic heap growth based on demand
 - [ ] **Persistent Storage** - Disk driver with FAT32 reading/writing
@@ -798,23 +996,25 @@ Verify executor is initialized and run() is called in main loop
 - [ ] **Process Management** - Process creation, termination, and IPC
 - [ ] **System Calls** - User-mode to kernel-mode transitions
 - [ ] **Memory Protection** - User/kernel memory isolation
-- [ ] **Enhanced Authentication** - Password hashing, multiple users, sudo-like system
-- [ ] **User Management** - adduser, deluser, user permissions, role management
-- [ ] **Session Management** - Multiple concurrent sessions, session switching
+- [ ] **Enhanced Authentication** - Password hashing with bcrypt/argon2
+- [ ] **Multi-User Sessions** - Multiple concurrent user sessions
 - [ ] **Audit Logging** - Authentication logs, command history tracking
 - [ ] **Network Support** - Network card driver and basic networking
 - [ ] **GUI Subsystem** - Window manager and basic graphics
-- [ ] **Date/Time Functions** - Date display, alarm, timezone support
-- [ ] **File Permissions** - User-based file access control
+- [ ] **Date Display** - Full date functionality with timezone selection
+- [ ] **File Permissions** - Permission enforcement per UID
 
 ## 🔒 Security Features
 
 ### Current Implementation
 - **User Authentication**: Login required before shell access
 - **Role-Based Access**: Admin vs Standard user roles
+- **User Management**: Admin-only user creation and deletion
+- **UID Tracking**: Unique user identification system
 - **Session Management**: Track current authenticated user
 - **Password Masking**: Hide password input during login
 - **Credential Validation**: Case-insensitive username matching
+- **Home Directory Isolation**: Each user gets personal directory
 
 ### Planned Security Enhancements
 - **Password Hashing**: Replace plain-text password storage with bcrypt/argon2
@@ -824,7 +1024,7 @@ Verify executor is initialized and run() is called in main loop
 - **Audit Trail**: Log all authentication attempts and privileged actions
 - **Secure Boot**: Verify kernel integrity at startup
 - **User Isolation**: Separate memory spaces per user
-- **Permission System**: File and command access control
+- **Permission System**: File and command access control enforcement
 
 ## 📄 License
 
@@ -836,5 +1036,5 @@ Issues and pull requests are welcome to improve the project!
 
 ---
 
-**JC-OS v0.3 - Andre Edition**  
+**JC-OS v0.4 - Andre Edition**  
 A minimalist bare-metal operating system written in Rust
