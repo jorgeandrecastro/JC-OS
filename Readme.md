@@ -788,8 +788,6 @@ UID: 0
 | `note` | Create file with content | `note <filename> <content>` |
 | `read` | Read file content | `read <filename>` |
 | `drop` | Delete file/directory | `drop <filename>` |
-| `touch` | Create new file | `touch <filename> <content>` |
-| `cat` | Read file content | `cat <filename>` |
 | `edit` | Modify file | `edit <filename> <new_content>` |
 | `type` | Interactive file editor | `type <filename>` |
 
