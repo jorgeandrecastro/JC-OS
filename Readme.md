@@ -55,6 +55,7 @@ This project demonstrates the fundamentals of OS creation:
 - **File management commands**: touch, cat, rm, edit
 - **System information**: info, stats, whoami, neofetch, date
 - **Utility commands**: help, echo, clear, ls
+- **AI Assistant**: `ia` command for interactive AI queries via local LLM
 - **Secure login system** with authentication
 
 ### User Authentication & Management
@@ -239,6 +240,8 @@ jc-os/
 ├── Cargo.toml                    # Rust project configuration
 ├── Readme.md                     # This file
 ├── x86_64-jc-os.json             # Custom target spec
+├── tools/
+│   └── ai_bridge.py              # AI Bridge server (LLM integration)
 ├── src/
 │   ├── main.rs                   # Entry point + initialization
 │   ├── gdt.rs                    # GDT + TSS (segmentation)
@@ -698,20 +701,59 @@ Command Buffer:
 ```
 
 ### 13. Serial Port (`src/serial.rs`)
-**Role**: Debugging via serial connection
+**Role**: Debugging via serial connection + AI Bridge communication
 
 ```
 Configuration:
 • Port: COM1 (0x3F8)
 • UART: 16550 standard
 • Output: stdout during QEMU debugging
+• AI Bridge: Bidirectional communication on port 1234
 
-Usage:
+Features:
 • Boot log: "[JC-OS] Kernel starting..."
 • System log: "[GDT] Loaded", "[IDT] Loaded"
 • Memory stats: "Heap Allocator Ready"
 • Panic display
 • Serial print for debugging
+• AI communication: read_line() for receiving LLM responses
+• AI requests: serial_println!("AI_REQ:{}", query) for sending queries
+```
+
+### 14. AI Bridge (`tools/ai_bridge.py`)
+**Role**: Local LLM integration for JC-OS AI assistant
+
+```
+Configuration:
+• Script: tools/ai_bridge.py
+• Model: SmolLM2-135M-Instruct-Q8_0.gguf
+• Host: 127.0.0.1
+• Port: 1234
+• Protocol: TCP socket communication
+
+Features:
+• Socket server listening on port 1234
+• Receives AI queries via serial from kernel
+• Uses llama_cpp for local LLM inference
+• Sends responses back via serial connection
+• Text cleaning for VGA display (ASCII only)
+• Temperature: 0.1 for stable responses
+
+Communication Protocol:
+1. Kernel sends: serial_println!("AI_REQ:{query}")
+2. Bridge receives query and processes with LLM
+3. Bridge sends response with trailing \n
+4. Kernel reads response via serial::read_line()
+
+Usage:
+```bash
+# Start the AI bridge before running JC-OS
+python tools/ai_bridge.py
+
+# In JC-OS shell:
+ia what is a kernel?
+[JC-AI]: A kernel is the core of an operating system...
+```
 ```
 
 ## 🚀 Installation and Compilation
@@ -819,6 +861,7 @@ UID: 0
 | `Enter` | Execute command |
 | `Backspace` | Delete previous character |
 | `Esc` | Clear buffer + reset screen |
+| `ia` | Ask AI assistant (requires AI bridge) |
 
 ### Editor Shortcuts (type command)
 
@@ -860,10 +903,13 @@ Task Scheduling: READY | Async/Await supported
 Authentication: ENABLED | Session active
 
 andre@jc-os:/$ help
-Commands: help, info, stats, echo, whoami, look, open, room, where, note, read, drop, type, useradd, userdel, date, neofetch
+Commands: help, info, stats, echo, whoami, look, open, room, where, note, read, drop, type, useradd, userdel, date, neofetch, ia
 
 andre@jc-os:/$ date
 Time: 14:30:45 (UTC+2, Summer Time)
+
+andre@jc-os:/$ ia what is JC-OS?
+[JC-AI]: JC-OS is a minimalist bare-metal operating system kernel written in Rust.
 
 andre@jc-os:/$ room home
 Directory 'home' created.
