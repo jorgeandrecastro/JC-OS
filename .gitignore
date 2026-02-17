@@ -6,6 +6,7 @@
 *.bin
 *.iso
 
+
 # IDE / editor
 .vscode/
 .idea/

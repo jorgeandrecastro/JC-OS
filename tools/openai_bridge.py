@@ -26,7 +26,7 @@ PORT = 1234
 print("--- PONT CLOUD GROQ POUR JC-OS : INITIALISATION ---")
 
 def clean_text(text: str) -> str:
-    """Indispensable pour ton driver VGA Rust"""
+    """Nettoie les caractères Unicode combinés pour ton driver VGA Rust"""
     nfkd_form = unicodedata.normalize('NFKD', text)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
@@ -58,15 +58,22 @@ def start_bridge():
                             session_data = ""
                             continue
 
-                        print(f"\n[CLOUD QUERY] : {query}")
+                        # 1. Info utilisateur
+                        print("\nInterrogating JC-AI...")
 
                         try:
+                            # 2. Requête API avec prompt corrigé pour [[CLEAR]]
                             completion = client.chat.completions.create(
-                                model="llama-3.1-8b-instant",  # modèle supporté Groq
+                                model="llama-3.1-8b-instant",
                                 messages=[
                                     {
-                                        "role": "system", 
-                                        "content": "You are JC-AI running inside a custom Rust kernel. Be extremely concise, max 15 words."
+                                        "role": "system",
+                                        "content": (
+                                            "You are JC-AI running inside a custom Rust kernel. "
+                                            "Be extremely concise, max 15 words. "
+                                            "If the user asks to clear the screen, respond ONLY with [[CLEAR]]. "
+                                            "Do NOT use any ANSI codes or extra characters."
+                                        )
                                     },
                                     {"role": "user", "content": query}
                                 ],
@@ -75,15 +82,24 @@ def start_bridge():
 
                             response = completion.choices[0].message.content
                             final_reply = clean_text(response).replace('\n', ' ').strip()
-                            
-                            print(f"[IA CLOUD] : {final_reply}")
-                            conn.sendall(f"{final_reply}\n".encode('utf-8'))
-                        
+
+                            # 3. Gestion du retour
+                            if final_reply == "[[CLEAR]]":
+                                # Signal d'effacement pour le kernel Rust
+                                conn.sendall("[[CLEAR]]\n".encode('utf-8'))
+                                print("[JC-AI]: Ecran nettoyé")
+                            elif not final_reply:
+                                conn.sendall("[ERROR]: Pas de reponse de l'IA.\n".encode('utf-8'))
+                                print("[ERROR]: Pas de reponse de l'IA.")
+                            else:
+                                conn.sendall(f"{final_reply}\n".encode('utf-8'))
+                                print(f"[JC-AI]: {final_reply}")
+
                         except Exception as e:
-                            error_msg = f"Erreur API: {str(e)}"
+                            error_msg = f"[ERROR]: Erreur API: {str(e)}"
                             print(error_msg)
                             conn.sendall(f"{error_msg}\n".encode('utf-8'))
-                        
+
                         session_data = ""
 
 if __name__ == "__main__":
