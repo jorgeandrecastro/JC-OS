@@ -42,15 +42,26 @@ pub fn read_byte() -> u8 {
 }
 
 /// Lit une ligne complète
+/// Lit une ligne complète en ignorant les caractères de contrôle initiaux
 pub fn read_line() -> alloc::string::String {
     let mut s = alloc::string::String::new();
     loop {
         let b = read_byte();
-        if b == b'\n' || b == b'\r' {
-            if !s.is_empty() { break; } 
+        
+        // On ignore les retours à la ligne s'ils sont au tout début (nettoyage de buffer)
+        if (b == b'\n' || b == b'\r') && s.is_empty() {
             continue;
         }
-        s.push(b as char);
+        
+        // Fin de la réponse
+        if b == b'\n' || b == b'\r' {
+            break;
+        }
+
+        // On ne garde que les caractères imprimables pour éviter les glitchs VGA
+        if b >= 32 && b <= 126 {
+            s.push(b as char);
+        }
     }
     s
 }

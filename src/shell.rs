@@ -436,7 +436,7 @@ pub fn interpret_command(command: &str) {
             println!("Files/Folders : {}", file_count);
             println!("Used Space    : {} bytes", total_bytes);
         },
-      "ask" => {
+      "ia" => {
     if args.is_empty() {
         println!("Usage: ask <votre question>");
     } else {
