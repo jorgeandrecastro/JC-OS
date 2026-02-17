@@ -1,5 +1,3 @@
-// src/serial.rs
-
 use uart_16550::SerialPort;
 use spin::Mutex;
 use lazy_static::lazy_static;
@@ -34,4 +32,25 @@ macro_rules! serial_println {
     () => ($crate::serial_print!("\n"));
     ($fmt:expr) => ($crate::serial_print!(concat!($fmt, "\n")));
     ($fmt:expr, $($arg:tt)*) => ($crate::serial_print!(concat!($fmt, "\n"), $($arg)*));
+}
+
+// --- CORRECTION POUR L'IA ---
+
+/// Lit un seul octet sur le port série (bloquant)
+pub fn read_byte() -> u8 {
+    SERIAL1.lock().receive() // .receive() attend déjà que la donnée soit prête
+}
+
+/// Lit une ligne complète
+pub fn read_line() -> alloc::string::String {
+    let mut s = alloc::string::String::new();
+    loop {
+        let b = read_byte();
+        if b == b'\n' || b == b'\r' {
+            if !s.is_empty() { break; } 
+            continue;
+        }
+        s.push(b as char);
+    }
+    s
 }

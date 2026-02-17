@@ -4,6 +4,7 @@ use pc_keyboard::{DecodedKey, KeyCode};
 use crate::drivers::keyboard::KEY_QUEUE;
 use crate::fs::NodeType; 
 use alloc::format;
+use crate::serial_println;
 
 fn print_prompt() {
     let auth = crate::auth::AUTH.lock();
@@ -161,6 +162,7 @@ pub fn interpret_command(command: &str) {
             println!("Commands: help, info, whoami, clear, stats, neofetch");
             println!("FS: look, open <dir>, room <name>, where, note <file> <text>, read <file>, drop <file>");
         },
+        
 
 "type" => {
     let file_name = args.trim();
@@ -434,7 +436,35 @@ pub fn interpret_command(command: &str) {
             println!("Files/Folders : {}", file_count);
             println!("Used Space    : {} bytes", total_bytes);
         },
+      "ask" => {
+    if args.is_empty() {
+        println!("Usage: ask <votre question>");
+    } else {
+        // 1. On informe l'utilisateur
+        println!(""); // Nouvelle ligne pour la propreté
+        print!("Interrogating JC-AI...");
+        
+        // 2. Envoi STRICT de la requête
+        serial_println!("AI_REQ:{}", args); 
 
+        // 3. Lecture de la réponse (Le Kernel bloque ici jusqu'au \n)
+        let response = crate::serial::read_line();
+        
+        // 4. Nettoyage de l'affichage (on efface "Interrogating...")
+        println!("\r"); 
+
+        // 5. Logique de commande et affichage UNIQUE
+        if response.contains("[[CLEAR]]") {
+            crate::vga_buffer::clear_screen(); 
+            println!("[JC-AI]: Ecran nettoye, Andre !");
+        } else if response.is_empty() {
+            println!("[ERROR]: Pas de reponse de l'IA.");
+        } else {
+            // Un seul println suffit !
+            println!("[JC-AI]: {}", response);
+        }
+    }
+},
        "neofetch" => {
     let time = crate::drivers::rtc::get_time();// On récupère l'heure corrigée (été/hiver)
     println!("   _/_/    JC-OS v0.4 - Rust Edition");
