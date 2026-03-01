@@ -42,7 +42,6 @@ struct Buffer {
 pub struct Writer {
     pub column_position: usize,
     pub row_position: usize,
-    // On mémorise la fin de chaque ligne pour le backspace intelligent
     line_lengths: [usize; BUFFER_HEIGHT],
     pub color_code: ColorCode,
     buffer: &'static mut Buffer,
@@ -65,37 +64,57 @@ impl Writer {
                     color_code: self.color_code,
                 });
                 self.column_position += 1;
-                // On met à jour la longueur de la ligne actuelle
                 self.line_lengths[self.row_position] = self.column_position;
             }
         }
         self.update_cursor(); 
     }
 
+    /// Écrit un octet à une position précise sans modifier l'état du Writer (curseur global)
+    pub fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
+        if row < BUFFER_HEIGHT && col < BUFFER_WIDTH {
+            self.buffer.chars[row][col].write(ScreenChar {
+                ascii_character: byte,
+                color_code: self.color_code,
+            });
+        }
+    }
+
     pub fn write_string(&mut self, s: &str) {
         for byte in s.bytes() {
             match byte {
                 0x20..=0x7e | b'\n' => self.write_byte(byte),
-                _ => self.write_byte(0xfe),
+                0x08 => self.backspace(),
+                _ => self.write_byte(b' '), 
             }
         }
+    }
+
+    pub fn write_string_at(&mut self, s: &str, row: usize, col: usize) {
+        let old_row = self.row_position;
+        let old_col = self.column_position;
+        
+        self.row_position = row;
+        self.column_position = col;
+        self.write_string(s);
+        
+        self.row_position = old_row;
+        self.column_position = old_col;
+        self.update_cursor();
     }
 
     pub fn new_line(&mut self) {
         if self.row_position < BUFFER_HEIGHT - 1 {
             self.row_position += 1;
         } else {
-            // Scroll : on décale aussi les longueurs de lignes
-            // Dans new_line :
-// On commence à row 2 pour copier vers row 1, laissant row 0 intacte
-for row in 2..BUFFER_HEIGHT { 
-    for col in 0..BUFFER_WIDTH {
-        let character = self.buffer.chars[row][col].read();
-        self.buffer.chars[row - 1][col].write(character);
-    }
-    self.line_lengths[row - 1] = self.line_lengths[row];
-}
-self.clear_row(BUFFER_HEIGHT - 1);
+            for row in 1..BUFFER_HEIGHT { 
+                for col in 0..BUFFER_WIDTH {
+                    let character = self.buffer.chars[row][col].read();
+                    self.buffer.chars[row - 1][col].write(character);
+                }
+                self.line_lengths[row - 1] = self.line_lengths[row];
+            }
+            self.clear_row(BUFFER_HEIGHT - 1);
         }
         self.column_position = 0;
         self.update_cursor();
@@ -141,17 +160,11 @@ self.clear_row(BUFFER_HEIGHT - 1);
         if self.column_position > 0 {
             self.column_position -= 1;
         } else if self.row_position > 0 {
-            // REMONTÉE INTELLIGENTE
             self.row_position -= 1;
-            // On se remet à la fin du texte de la ligne du dessus
             self.column_position = self.line_lengths[self.row_position];
-            
-            // Si la ligne était pleine (80), on recule d'un cran pour pouvoir effacer
             if self.column_position >= BUFFER_WIDTH {
                 self.column_position = BUFFER_WIDTH - 1;
             }
-            
-            // Si la ligne est vide (juste un \n), on ne fait rien de plus
             if self.column_position == 0 {
                 self.update_cursor();
                 return;
@@ -167,20 +180,15 @@ self.clear_row(BUFFER_HEIGHT - 1);
             ascii_character: b' ',
             color_code: self.color_code,
         });
-        // On met à jour la mémoire de longueur de ligne
         self.line_lengths[self.row_position] = self.column_position;
         self.update_cursor();
     }
-}
 
-// Nouvelle fonctionnalité : affichage de l'horloge en haut à droite
-impl Writer {
+    // --- Fonctions utilitaires d'affichage ---
+
     pub fn write_clock(&mut self, hours: u8, minutes: u8, seconds: u8) {
         let row = 0;
-        let col = 71; // Position tout en haut à droite
-
-        
-        // Formatage "00:00:00" sans allocation (No-Std style)
+        let col = 71; 
         self.write_digit_at(hours / 10, row, col);
         self.write_digit_at(hours % 10, row, col + 1);
         self.write_byte_at(b':', row, col + 2);
@@ -190,22 +198,49 @@ impl Writer {
         self.write_digit_at(seconds / 10, row, col + 6);
         self.write_digit_at(seconds % 10, row, col + 7);
     }
-    
-pub fn write_byte_at(&mut self, byte: u8, row: usize, col: usize) {
-    let color_code = self.color_code;
-    self.buffer.chars[row][col].write(ScreenChar {
-        ascii_character: byte,
-        color_code,
-    });
-}
 
     fn write_digit_at(&mut self, digit: u8, row: usize, col: usize) {
         self.write_byte_at(digit + b'0', row, col);
-
     }
-    
+
+    // --- Gestion de l'état de l'écran ---
+
+    pub fn save_screen(&self) -> ScreenState {
+        let mut data = [0u8; 4000];
+        for row in 0..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                let char = self.buffer.chars[row][col].read();
+                let index = (row * BUFFER_WIDTH + col) * 2;
+                data[index] = char.ascii_character;
+                data[index + 1] = char.color_code.0;
+            }
+        }
+        ScreenState { chars: data, row: self.row_position, col: self.column_position }
+    }
+
+    pub fn restore_screen(&mut self, state: &ScreenState) {
+        for row in 0..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                let index = (row * BUFFER_WIDTH + col) * 2;
+                self.buffer.chars[row][col].write(ScreenChar {
+                    ascii_character: state.chars[index],
+                    color_code: ColorCode(state.chars[index + 1]),
+                });
+            }
+        }
+        self.row_position = state.row;
+        self.column_position = state.col;
+        self.update_cursor();
+    }
 }
 
+// --- Implémentations Globales ---
+
+pub struct ScreenState {
+    pub chars: [u8; 4000],
+    pub row: usize,
+    pub col: usize,
+}
 
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -224,6 +259,8 @@ lazy_static! {
     });
 }
 
+// --- Fonctions Publiques ---
+
 pub fn clear_screen() {
     x86_64::instructions::interrupts::without_interrupts(|| {
         WRITER.lock().clear_screen();
@@ -235,10 +272,13 @@ pub fn backspace() {
         WRITER.lock().backspace();
     });
 }
-#[allow(dead_code)]
-pub fn print_char(c: char) {
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    use core::fmt::Write;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        WRITER.lock().write_byte(c as u8);
+        let mut writer = WRITER.lock();
+        writer.write_fmt(args).unwrap();
     });
 }
 
@@ -251,50 +291,4 @@ macro_rules! print {
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
-}
-
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
-    use core::fmt::Write;
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut writer = WRITER.lock();
-        writer.write_fmt(args).unwrap();
-    });
-}
-pub struct ScreenState {
-    pub chars: [u8; 4000],
-    pub row: usize,
-    pub col: usize,
-}
-
-impl Writer {
-    pub fn save_screen(&self) -> ScreenState {
-        let mut data = [0u8; 4000];
-        for row in 0..BUFFER_HEIGHT {
-            for col in 0..BUFFER_WIDTH {
-                let char = self.buffer.chars[row][col].read();
-                let index = (row * BUFFER_WIDTH + col) * 2;
-                data[index] = char.ascii_character;
-                data[index + 1] = char.color_code.0;
-            }
-        }
-        // On sauvegarde l'état complet
-        ScreenState { chars: data, row: self.row_position, col: self.column_position }
-    }
-
-    pub fn restore_screen(&mut self, state: &ScreenState) {
-        for row in 0..BUFFER_HEIGHT {
-            for col in 0..BUFFER_WIDTH {
-                let index = (row * BUFFER_WIDTH + col) * 2;
-                self.buffer.chars[row][col].write(ScreenChar {
-                    ascii_character: state.chars[index],
-                    color_code: ColorCode(state.chars[index + 1]),
-                });
-            }
-        }
-        // On restaure la position EXACTE
-        self.row_position = state.row;
-        self.column_position = state.col;
-        self.update_cursor();
-    }
 }

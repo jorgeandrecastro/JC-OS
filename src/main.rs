@@ -1,6 +1,3 @@
-// main.rs - JC-OS Kernel Entry Point
-// Version 0.2 - Andre Edition
-
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
@@ -13,7 +10,7 @@ use x86_64::VirtAddr;
 use crate::executor::Executor;
 use crate::task::Task;
 
-
+// --- DÉCLARATION DES MODULES ---
 mod vga_buffer;
 mod serial;
 mod interrupts;
@@ -21,69 +18,93 @@ mod gdt;
 mod drivers;
 mod memory;
 mod allocator;
-mod fs; // Important: link the new file system
-mod shell; // Important: link the new shell
-mod auth;// Important: link the new authentication module
+mod fs; 
+mod shell;
+mod auth;
 pub mod task;
 pub mod executor;
+mod syscalls; // Nouveau : Gestion des interruptions logicielles
+mod user;     // Nouveau : Espace utilisateur (Ring 3)
 
-
-
+// --- CONFIGURATION DE LA PILE UTILISATEUR ---
 entry_point!(kernel_main);
 
-fn kernel_main(boot_info: &'static BootInfo) -> ! {
-    serial_println!("[JC-OS] Kernel starting...");
+// On utilise une struct pour forcer l'alignement sur une page (4096 bytes)
 
-    // 1. Core Architecture Setup
+#[repr(C, align(4096))]
+pub struct UserStack {
+    pub data: [u8; 16384],
+}
+#[no_mangle]
+pub static mut USER_STACK: UserStack = UserStack { data: [0; 16384] };
+
+fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    // 1. Setup Architecture (GDT, IDT, Syscalls)
     gdt::init();
     interrupts::init_idt();
+   
+    syscalls::init_gs_base();
     interrupts::init_pic();
-    
-    // 2. Memory Management (Paging & Frame Allocation)
+    unsafe { crate::syscalls::init(); }
+
+   // 2. Memory & Heap
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    let mut mapper = unsafe { memory::init(phys_mem_offset) };
-    let mut frame_allocator = unsafe {
-        memory::BootInfoFrameAllocator::init(&boot_info.memory_map)
-    };
+    
+    // Initialisation du mapper global (dans memory.rs)
+    unsafe { memory::init_global(phys_mem_offset) };
 
-    // 3. Dynamic Memory Allocation (Heap)
-    allocator::init_heap(&mut mapper, &mut frame_allocator)
-        .expect("Heap initialization failed");
+    // On récupère le verrou pour initialiser le Heap
+    {
+        let mut mapper_lock = memory::MAPPER.lock();
+        let mapper = mapper_lock.as_mut().expect("Mapper global non initialisé");
+        let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
+        
+        allocator::init_heap(mapper, &mut frame_allocator)
+            .expect("Heap Initialization Failed");
+    }
 
-    serial_println!("[SYSTEM] Heap Allocator Ready");
+    // Make GS_BASE (KERNEL_DATA) accessible from user mode for syscalls
+    syscalls::make_gs_accessible_from_user();
 
-    // 4. Input Drivers
-    init_keyboard_controller();
+    // 3. Setup pile Kernel
+    let tss_stack = gdt::get_tss_stack_ptr().as_u64();
+    syscalls::set_kernel_stack(tss_stack);
+
+    // 4. Drivers
     drivers::keyboard::init();
-    
-    // 5. Activation
     x86_64::instructions::interrupts::enable();
-    
-    // 6. UI Launch
+
     display_screen();
 
-    // --- ICI LE CHANGEMENT POUR LE MULTITACHE ---
+    // --- L'EXECUTOR ---
     let mut executor = Executor::new();
 
-    // 1. On lance le Shell (il va afficher le prompt et gérer les commandes)")
-    executor.spawn(Task::new(shell::run_shell()));
-    
-    // 2. On garde l'horloge
-    executor.spawn(Task::new(clock_task()));   
+    // Tâche 1 : L'horloge (Ring 0) - Elle tournera toujours en fond
+    executor.spawn(Task::new(clock_task())); 
 
-    // 3. On peut garder les autres tâches de fond
-    executor.spawn(Task::new(example_task())); 
+    // Tâche 2 : Le Shell (Ring 0)
+    // C'est lui qui affichera le prompt et te permettra de taper "run"
+    executor.spawn(Task::new(crate::shell::run_shell())); 
 
-    serial_println!("[SYSTEM] Multitasking Executor Started");
+    serial_println!("[SYSTEM] JC-OS Ready. Executor running.");
     
+    // 5. Lancement
     executor.run();
-    
 }
+// --- GESTION DES ERREURS & PANIC ---
 
 #[alloc_error_handler]
 fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("Alloc Error: {:?}", layout)
 }
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    serial_println!("\n[PANIC] {}", info);
+    loop { x86_64::instructions::hlt(); }
+}
+
+// --- FONCTIONS AUXILIAIRES ---
 
 fn init_keyboard_controller() {
     use x86_64::instructions::port::Port;
@@ -104,48 +125,38 @@ fn display_screen() {
     use vga_buffer::{WRITER, ColorCode, Color};
     let mut writer = WRITER.lock();
     writer.clear_screen();
+    
+    // On garde ça ultra simple et pro
     writer.set_color_code(ColorCode::new(Color::LightCyan, Color::Black));
-    writer.write_string("╔════════════════════════════════════════════════════════════════╗\n");
-    writer.write_string("║           JC-OS - BARE METAL KERNEL v0.4 - RUST              ║\n");
-    writer.write_string("╚════════════════════════════════════════════════════════════════╝\n\n");
+    writer.write_string("JC-OS Rust Kernel\n");
+    writer.write_string("-----------------\n");
+    
     writer.set_color_code(ColorCode::new(Color::White, Color::Black));
-    writer.write_string("Digital Sovereignty System \n");
-    writer.write_string("File System: READY (RAMFS) | Commands exemples: touch, ls, cat, rm, edit\n\n");
-
+    writer.write_string("Ready.\n\n");
 }
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    serial_println!("\n[PANIC] {}", info);
-    loop { x86_64::instructions::hlt(); }
-}
+// --- TÂCHES ASYNCHRONES ---
 
 async fn example_task() {
     let mut count: u64 = 0;
     loop {
         count += 1;
         if count % 1000000 == 0 {
-            // En l'utilisant ici, le warning disparaît
-            serial_println!("[TASK] Compteur : {}", count);
+            // serial_println!("[TASK] Compteur : {}", count);
         }
         crate::task::yield_now().await;
     }
 }
 
-// Tâche pour afficher l'horloge en temps réel
 async fn clock_task() {
     let mut last_second = 255;
-
     loop {
-        // Changement du chemin vers crate::rtc::get_time()
-        let time = crate::drivers::rtc::get_time(); // <--- VERIFIE CE CHEMIN
-        
+        let time = crate::drivers::rtc::get_time(); 
         if time.seconds != last_second {
             let mut writer = crate::vga_buffer::WRITER.lock();
             writer.write_clock(time.hours, time.minutes, time.seconds);
             last_second = time.seconds;
         }
-
         crate::task::yield_now().await;
     }
 }

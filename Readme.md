@@ -97,12 +97,28 @@ This project demonstrates the fundamentals of OS creation:
 ### System Management
 - **GDT** (Global Descriptor Table) - CPU segmentation
 - **TSS** (Task State Segment) with Double Fault stack
-- **IDT** (Interrupt Descriptor Table) - Interrupt vectors
+- **IDT** (Interrupt Descriptor Table) - Interrupt vectors with exception handlers
 - **PIC 8259** - Programmable Interrupt Controller
-- **Double Fault Handler** protected by IST (Interrupt Stack Table)
+- **Double Fault Handler** with proper IST stack protection
+- **Page Fault Handler** with detailed error reporting
+- **General Protection Fault Handler** for CPU violations
+- **Invalid Opcode Handler** for instruction errors
 - **Timer Interrupt** - Hardware timer (IRQ0) for real-time clock display
 - **Keyboard Interrupt** - PS/2 keyboard input handling
 - **Mouse Interrupt** - PS/2 mouse input handling (IRQ12)
+
+### User Mode & Syscalls (Ring 3)
+- **Privilege Level Switching** - Kernel Ring 0 ↔ User Ring 3
+- **Syscall Interface** - SYSCALL/SYSRET AMD64 mechanism
+- **User Stack Isolation** - Separate stack for user programs
+- **GS_BASE Register Setup** - Kernel data structure access from user mode
+- **IA32_KERNEL_GS_BASE MSR** - Proper swapgs initialization
+- **System Call Handler** - Kernel-side syscall entry point
+- **Argument Marshalling** - System V AMD64 ABI compliance
+- **Page Accessibility** - User-accessible kernel memory for syscall operations
+- **User Program Support** - Ring 3 test programs with syscalls
+- **SYS_PRINT** - Print to serial from user mode
+- **SYS_EXIT** - Clean program termination from user mode
 
 ### Memory Management
 - **x86_64 Paging** (4-level page tables)
@@ -110,8 +126,11 @@ This project demonstrates the fundamentals of OS creation:
 - **Frame allocator** using UEFI memory map
 - **Heap allocation** (100 KiB) with linked-list allocator
 - **Virtual to physical address translation**
-- **Page-level protection** (PRESENT, WRITABLE flags)
+- **Page-level protection** (PRESENT, WRITABLE, USER_ACCESSIBLE flags)
 - **Error handling** with Result type and alloc_error_handler
+- **User-Accessible Memory** - Kernel structures marked for user mode access
+- **Safe Page Table Traversal** - Presence checks prevent cascading page faults
+- **Force User Access** - Hierarchical page table permission unlocking
 
 ### Debugging
 - **COM1 serial output** via UART 16550
@@ -756,6 +775,87 @@ ia what is a kernel?
 ```
 ```
 
+### 15. Syscalls & User Mode (`src/syscalls.rs`, `src/user.rs`)
+**Role**: User mode program execution with system call interface
+
+```
+Architecture:
+• SYSCALL/SYSRET mechanism (AMD64)
+• Privilege level switching (Ring 0 ↔ Ring 3)
+• GS_BASE registers for kernel data access
+• Separate user and kernel stacks
+
+Kernel Setup:
+• Initialization in kernel_main()
+1. init_gs_base() - Set GS/IA32_KERNEL_GS_BASE MSR
+2. syscalls::init() - EFER, LSTAR, STAR, SFMask configuration
+3. make_gs_accessible_from_user() - Mark KERNEL_DATA readable
+4. set_kernel_stack() - Initialize privilege stack
+
+Syscall Entry Point (Assembly):
+• swapgs - Swap user/kernel GS
+• Stack swapping - Kernel stack activation
+• Argument remapping - System V ABI compliance
+  - User: rax=ID, rdi=arg1, rsi=arg2
+  - Kernel: rdi=ID, rsi=arg1, rdx=arg2
+• Call C function syscall_handler()
+• Context restoration on sysret
+
+System Calls:
+• SYS_PRINT (ID=1): Print string to serial
+  - Arguments: rdi=pointer, rsi=length
+  - Output: "[RING 3] <message>"
+• SYS_EXIT (ID=0): Terminate user program
+  - Arguments: rdi=exit_code
+  - Result: Kernel halt loop
+
+User Mode Execution:
+• jump_to_user() - iretq transition to Ring 3
+• Stack frame: SS, RSP, RFLAGS, CS, RIP
+• IF bit set in RFLAGS for user interrupts
+• Code and stack pages marked USER_ACCESSIBLE
+
+Memory Access:
+• KERNEL_DATA (16 bytes) - Kernel stack pointers
+  - Offset 0x00: kernel_stack (RSP during syscall)
+  - Offset 0x08: user_stack (saved user RSP)
+• Force unlocking 10 code pages for .text/.rodata
+• Force unlocking 5 stack pages for user stack
+
+Example User Program:
+```rust
+#[no_mangle]
+pub extern "C" fn user_test_program() -> ! {
+    sys_print("Hello from Ring 3!");
+    sys_print("JC-OS user mode is working.");
+    sys_exit(0);
+}
+
+fn sys_print(s: &str) {
+    unsafe { asm!("syscall", in("rax") 1, in("rdi") s.as_ptr(), in("rsi") s.len()); }
+}
+
+fn sys_exit(code: u64) -> ! {
+    unsafe { asm!("syscall", in("rax") 0, in("rdi") code, options(noreturn)); }
+}
+```
+
+Testing:
+```
+JC-OS Shell:
+andre@jc-os:/$ run
+--- Preparing Ring 3 (Hierarchical Access) ---
+[DEBUG] Code address: 0x2349e0
+[DEBUG] Stack start:  0x284000
+--- Jumping to Ring 3 ---
+[SYSCALL] Handler: ID=1, ARG1=0xAAAA, ARG2=14
+[RING 3] Hello from Ring 3!
+[RING 3] JC-OS user mode is working.
+[SYSCALL] SYS_EXIT (code=0)
+[SYSTEM] User program exited with code 0
+```
+```
+
 ## 🚀 Installation and Compilation
 
 ### Prerequisites
@@ -1025,28 +1125,97 @@ Ensure RAMFS is initialized: check boot log for "[FS] RAM File System initialize
 ### Async tasks not running
 Verify executor is initialized and run() is called in main loop
 
+## � Bug Fixes & Critical Corrections
+
+### Double Fault Prevention (v0.4.1)
+
+**Issue**: CPU triggering double faults during exception handling
+
+**Root Cause**: 
+- Page table entry access without presence validation
+- Missing exception handlers in IDT  
+- Cascading page faults during exception handling
+
+**Solutions Implemented**:
+1. **Safe Page Table Access**: Added `PageTableFlags::PRESENT` checks before dereferencing frames
+2. **Comprehensive Exception Handlers**:
+   - Page Fault Handler - Logs faulting address with detailed error info
+   - General Protection Fault Handler - CPU violation reporting
+   - Invalid Opcode Handler - Instruction error capture
+   - Breakpoint Handler - Debug support
+3. **IST Stack for Double Faults** - Dedicated stack prevents recursive failures
+4. **Graceful Error Handling** - Returns `false` instead of panicking on mapping failures
+
+### Syscall Implementation & Argument Passing (v0.4.1)
+
+**Issue**: Garbled arguments when transitioning to user mode syscalls
+
+**Root Causes**:
+1. Syscall entry point not rearranging arguments per System V AMD64 ABI
+2. GS_BASE register not initialized for user-accessible kernel data
+3. IA32_KERNEL_GS_BASE MSR pointing to undefined memory
+4. Incorrect iretq stack frame order for Ring 3 transition
+
+**Solutions Implemented**:
+1. **Argument Remapping** (`src/syscalls.rs` lines 23-25):
+   ```asm
+   mov rdx, rsi          # arg2 (was in rsi)
+   mov rsi, rdi          # arg1 (was in rdi)  
+   mov rdi, rax          # ID (was in rax)
+   ```
+
+2. **Dual GS_BASE Initialization**:
+   - GS_BASE → User mode kernel data access
+   - IA32_KERNEL_GS_BASE MSR → Kernel mode mirror
+   - Both point to KERNEL_DATA structure (16 bytes)
+
+3. **User-Accessible Memory Marking**:
+   - `make_gs_accessible_from_user()` calls `force_user_access()`
+   - Ensures syscall handler can write to gs:[0x00] and gs:[0x08]
+   - Called after memory initialization completes
+
+4. **Corrected iretq Stack Frame**:
+   - Proper ordering: SS → RSP → RFLAGS → CS → RIP
+   - IF bit set to enable interrupts in user mode
+   - Correct privilege level transition (Ring 0 → Ring 3)
+
+### Memory Protection Fixes (v0.4.1)
+
+**Issue**: User programs accessing unmapped kernel memory causing page faults
+
+**Solutions**:
+1. **Multi-Page Unlocking**: Unlock 10 pages around user code for .text and .rodata
+2. **Stack Protection**: Unlock full 16KB user stack (4-5 pages)
+3. **Bounds Checking**: Validate pages exist before attempting access
+4. **Return Status**: `force_user_access()` returns `bool` for success/failure
+5. **Graceful Degradation**: Continue on partial failures, report to shell
+
+- [ ] **File Permissions** - Permission enforcement per UID
 ## 🔮 Future Improvements
 
-- [ ] **Mouse Integration** - Full cursor rendering, click events, GUI interaction
-- [ ] **Page Fault Handler** - Better memory error reporting and debugging
+- [x] **System Calls** - User-mode to kernel-mode transitions (IMPLEMENTED v0.4.1)
+- [x] **Page Fault Handler** - Memory error reporting and debugging (IMPLEMENTED v0.4.1)
+- [x] **Exception Handlers** - Complete IDT exception coverage (IMPLEMENTED v0.4.1)
+- [ ] **Mouse Cursor Rendering** - Visual cursor with click event handling
 - [ ] **Kernel Heap Expansion** - Dynamic heap growth based on demand
 - [ ] **Persistent Storage** - Disk driver with FAT32 reading/writing
 - [ ] **Advanced Shell** - Tab completion, command history, environment variables
-- [ ] **Preemptive Scheduling** - Timer-based task switching
+- [ ] **Preemptive Scheduling** - Timer-based task switching instead of cooperative
 - [ ] **Multiple Executors** - Multi-core task distribution
-- [ ] **Task Priorities** - Priority-based task scheduling
+- [ ] **Task Priorities** - Priority-based task scheduling with priority queues
 - [ ] **Inter-Task Communication** - Channels, signals, and message passing
 - [ ] **Virtual File System** - VFS abstraction layer for multiple file systems
-- [ ] **Process Management** - Process creation, termination, and IPC
-- [ ] **System Calls** - User-mode to kernel-mode transitions
-- [ ] **Memory Protection** - User/kernel memory isolation
+- [ ] **Process Management** - Complex process creation, termination, and IPC
+- [ ] **Additional Syscalls** - Read, write, fork, exec, wait beyond basic I/O
+- [ ] **Memory Protection** - Stricter user/kernel memory isolation
 - [ ] **Enhanced Authentication** - Password hashing with bcrypt/argon2
-- [ ] **Multi-User Sessions** - Multiple concurrent user sessions
+- [ ] **Multi-User Sessions** - Multiple concurrent user sessions/terminals
 - [ ] **Audit Logging** - Authentication logs, command history tracking
 - [ ] **Network Support** - Network card driver and basic networking
-- [ ] **GUI Subsystem** - Window manager and basic graphics
-- [ ] **Date Display** - Full date functionality with timezone selection
-- [ ] **File Permissions** - Permission enforcement per UID
+- [ ] **GUI Subsystem** - Window manager and basic graphics rendering
+- [ ] **File Permissions** - Permission enforcement per UID/GID
+- [ ] **Signal Handling** - POSIX signal delivery to user programs
+
 
 ## 🔒 Security Features
 

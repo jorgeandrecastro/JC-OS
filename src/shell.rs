@@ -1,25 +1,24 @@
 use crate::{print, println, vga_buffer};
-use alloc::string::{String, ToString}; // On garde les deux finalement !
+use alloc::string::{String, ToString};
 use pc_keyboard::{DecodedKey, KeyCode};
 use crate::drivers::keyboard::KEY_QUEUE;
 use crate::fs::NodeType; 
 use alloc::format;
 use crate::serial_println;
+use x86_64::VirtAddr;
+use crate::USER_STACK;
 
 fn print_prompt() {
     let auth = crate::auth::AUTH.lock();
     let fs = crate::fs::FS.lock();
-    
     let username = auth.get_current_username();
     
-    // Construction du chemin CWD (Current Working Directory)
     let path = if fs.cwd.is_empty() {
         "/".to_string()
     } else {
         format!("/{}", fs.cwd.join("/"))
     };
 
-    // Prompt style Linux : andre@jc-os:/home$
     print!("{}@jc-os:{}$ ", username, path);
 }
 
@@ -29,56 +28,52 @@ pub async fn run_shell() {
 
     let mut command_buffer = String::with_capacity(256);
 
-    loop { // BOUCLE PRINCIPALE
-        // 1. Vérification : est-on connecté ?
+    loop {
         let is_logged_in = crate::auth::AUTH.lock().current_user.is_some();
 
         if !is_logged_in {
-            // --- PHASE DE LOGIN ---
             let mut user = String::new();
             let mut pass = String::new();
+            while let Some(_) = KEY_QUEUE.pop() {}
 
             println!("\n--- LOGIN REQUIRED ---");
             print!("Username: ");
-            read_line(&mut user, false).await;
+            read_line(&mut user, false).await; // ASYNC READ
+            println!(""); //
             
             print!("Password: ");
-            read_line(&mut pass, true).await; 
+            read_line(&mut pass, true).await;  // ASYNC READ
 
             if crate::auth::AUTH.lock().login(user.trim(), pass.trim()) {
                 println!("\nWelcome back, {}!", user.trim());
+                while let Some(_) = KEY_QUEUE.pop() {}
                 command_buffer.clear();
                 print_prompt();
             } else {
                 println!("\n[ERROR] Invalid credentials.");
             }
-            // On retourne au début du loop pour vérifier à nouveau is_logged_in
             continue; 
         }
 
-        // 2. PHASE DE COMMANDES (Si connecté)
         if let Some(key) = KEY_QUEUE.pop() {
             match key {
                 DecodedKey::Unicode(ch) => {
                     match ch {
                         '\n' | '\r' => {
                             println!("");
-                            interpret_command(&command_buffer);
+                            interpret_command(&command_buffer).await; // AJOUT DU .AWAIT ICI
                             command_buffer.clear();
                             
-                            // Si la commande était "logout", on ne print pas de prompt
                             if crate::auth::AUTH.lock().current_user.is_some() {
                                 print_prompt();
                             }
                         }
-                        // Support du Backspace en mode Unicode (0x08 ou 0x7F)
                         '\u{8}' | '\u{7f}' => {
                             if !command_buffer.is_empty() {
                                 command_buffer.pop();
                                 vga_buffer::backspace();
                             }
                         }
-                        // Accepte tous les caractères imprimables
                         c if c >= ' ' => {
                             command_buffer.push(c);
                             print!("{}", c);
@@ -108,45 +103,7 @@ pub async fn run_shell() {
     }
 }
 
-async fn read_line(buffer: &mut String, mask: bool)  {
-    buffer.clear();
-    loop {
-        if let Some(key) = KEY_QUEUE.pop() {
-            match key {
-                DecodedKey::Unicode(ch) => {
-                    match ch {
-                        '\n' | '\r' => {
-                            println!("");
-                            return;
-                        }
-                        '\u{8}' | '\u{7f}' => {
-                            if !buffer.is_empty() {
-                                buffer.pop();
-                                vga_buffer::backspace();
-                            }
-                        }
-                        c if c >= ' ' => {
-                            buffer.push(c);
-                            if mask { print!("*"); } else { print!("{}", c); }
-                        }
-                        _ => {}
-                    }
-                }
-                DecodedKey::RawKey(code) => {
-                    if code == KeyCode::Backspace {
-                        if !buffer.is_empty() {
-                            buffer.pop();
-                            vga_buffer::backspace();
-                        }
-                    }
-                }
-            }
-        }
-        crate::task::yield_now().await;
-    }
-}
-
-pub fn interpret_command(command: &str) {
+pub async fn interpret_command(command: &str) {
     let command = command.trim();
     if command.is_empty() { return; }
 
@@ -154,195 +111,113 @@ pub fn interpret_command(command: &str) {
     let cmd = parts.next().unwrap_or("");
     let args = parts.next().unwrap_or("");
 
-    // On récupère l'UID actuel pour les créations de fichiers/dossiers
-   let current_uid = crate::auth::AUTH.lock().get_current_uid();// À remplacer par auth.get_current_uid() plus tard
+    let current_uid = crate::auth::AUTH.lock().get_current_uid();
 
     match cmd {
         "help" => {
-            println!("Commands: help, info, whoami, clear, stats, neofetch");
-            println!("FS: look, open <dir>, room <name>, where, note <file> <text>, read <file>, drop <file>");
+            println!("Commands: help, info, whoami, clear, stats, neofetch, run, ia");
+            println!("FS: look, open <dir>, room <name>, where, note <file> <text>, read <file>, drop <file>, type <file>");
         },
-        
 
-"type" => {
-    let file_name = args.trim();
-    if file_name.is_empty() {
-        println!("Usage: type <filename>");
-    } else {
-        // --- ÉTAPE 1 : SAUVEGARDE TOTALE (Écran + Curseur) ---
-        let old_state = crate::vga_buffer::WRITER.lock().save_screen();
-
-        // --- INITIALISATION DE L'INTERFACE ---
-        crate::vga_buffer::clear_screen();
-        
-        {
-            let mut writer = crate::vga_buffer::WRITER.lock();
-            writer.set_color_code(crate::vga_buffer::ColorCode::new(
-                crate::vga_buffer::Color::DarkGray, 
-                crate::vga_buffer::Color::Black
-            ));
-            
-            let header = format!(" TYPE : {}  (Ctrl+S to save, Ctrl+Q to exit)", file_name);
-            for (i, b) in header.bytes().enumerate() {
-                writer.write_byte_at(b, 0, i);
-            }
-            
-            writer.set_color_code(crate::vga_buffer::ColorCode::new(
-                crate::vga_buffer::Color::White, 
-                crate::vga_buffer::Color::Black
-            ));
-            writer.row_position = 2; // On commence à écrire ici
-            writer.column_position = 0;
-            writer.update_cursor();
-        }
-
-        let mut content = String::new();
-        if let Some(existing) = crate::fs::FS.lock().read_file(file_name) {
-            content = existing;
-            print!("{}", content);
-        }
-
-        // --- BOUCLE D'ÉDITION INTERACTIVE ---
-        loop {
-            if let Some(key) = crate::drivers::keyboard::KEY_QUEUE.pop() {
-                match key {
-                    // Ctrl+Q : Quitter et RESTAURER l'état précédent
-                    pc_keyboard::DecodedKey::Unicode('\u{0011}') => {
-                        crate::vga_buffer::WRITER.lock().restore_screen(&old_state);
-                        break; 
-                    }
+        "type" => {
+            let file_name = args.trim();
+            if file_name.is_empty() {
+                println!("Usage: type <filename>");
+            } else {
+                let old_state = crate::vga_buffer::WRITER.lock().save_screen();
+                crate::vga_buffer::clear_screen();
+                
+                {
+                    let mut writer = crate::vga_buffer::WRITER.lock();
+                    writer.set_color_code(crate::vga_buffer::ColorCode::new(
+                        crate::vga_buffer::Color::DarkGray, 
+                        crate::vga_buffer::Color::Black
+                    ));
                     
-                    // Ctrl+S : Sauvegarder
-                    pc_keyboard::DecodedKey::Unicode('\u{0013}') => {
-                        let uid = crate::auth::AUTH.lock().get_current_uid();
-                        let mut fs = crate::fs::FS.lock();
-                        let _ = fs.write_file(file_name, &content, uid);
-                    }
+                    let header = format!(" TYPE : {}  (Ctrl+S to save, Ctrl+Q to exit)", file_name);
+                    writer.write_string_at(&header, 0, 0);
                     
-                    pc_keyboard::DecodedKey::Unicode('\u{08}') => {
-                        if !content.is_empty() {
-                            content.pop();
-                            crate::vga_buffer::backspace();
+                    writer.set_color_code(crate::vga_buffer::ColorCode::new(
+                        crate::vga_buffer::Color::White, 
+                        crate::vga_buffer::Color::Black
+                    ));
+                    writer.row_position = 2;
+                    writer.column_position = 0;
+                    writer.update_cursor();
+                }
+
+                let mut content = crate::fs::FS.lock().read_file(file_name).unwrap_or_else(|| String::new());
+                print!("{}", content);
+
+                loop {
+                    if let Some(key) = crate::drivers::keyboard::KEY_QUEUE.pop() {
+                        match key {
+                            pc_keyboard::DecodedKey::Unicode('\u{0011}') => { // Ctrl+Q
+                                crate::vga_buffer::WRITER.lock().restore_screen(&old_state);
+                                break; 
+                            }
+                            pc_keyboard::DecodedKey::Unicode('\u{0013}') => { // Ctrl+S
+                                let uid = crate::auth::AUTH.lock().get_current_uid();
+                                let mut fs = crate::fs::FS.lock();
+                                let _ = fs.write_file(file_name, &content, uid);
+                            }
+                            pc_keyboard::DecodedKey::Unicode('\u{08}') | pc_keyboard::DecodedKey::Unicode('\u{7f}') => {
+                                if !content.is_empty() {
+                                    content.pop();
+                                    crate::vga_buffer::backspace();
+                                }
+                            }
+                            pc_keyboard::DecodedKey::Unicode(c) => {
+                                print!("{}", c);
+                                content.push(c);
+                            }
+                            _ => {}
                         }
                     }
-                    
-                    pc_keyboard::DecodedKey::Unicode(c) => {
-                        print!("{}", c);
-                        content.push(c);
-                    }
-                    _ => {}
+                    crate::task::yield_now().await;
                 }
             }
-            x86_64::instructions::hlt();
-        }
-    }
-}
+        },
 
-       "useradd" => {
-    // --- VÉRIFICATION DE SÉCURITÉ ---
-    let is_admin = {
-        let auth = crate::auth::AUTH.lock();
-        auth.current_user.as_ref().map(|u| u.role == crate::auth::Role::Admin).unwrap_or(false)
-    };
+        "useradd" => {
+            let is_admin = {
+                let auth = crate::auth::AUTH.lock();
+                auth.current_user.as_ref().map(|u| u.role == crate::auth::Role::Admin).unwrap_or(false)
+            };
 
-    if !is_admin {
-        println!("[PERMISSION DENIED] Only administrators can add users.");
-    } else {
-        let mut arg_parts = args.splitn(2, ' ');
-        let new_username = arg_parts.next().unwrap_or("");
-        let new_password = arg_parts.next().unwrap_or("").trim();
+            if !is_admin {
+                println!("[PERMISSION DENIED] Only administrators can add users.");
+            } else {
+                let mut arg_parts = args.splitn(2, ' ');
+                let new_username = arg_parts.next().unwrap_or("");
+                let new_password = arg_parts.next().unwrap_or("").trim();
 
-        if new_username.is_empty() || new_password.is_empty() {
-            println!("Usage: useradd <username> <password>");
-        } else {
-            // 1. Ajouter l'utilisateur dans le système d'authentification
-            let mut auth = crate::auth::AUTH.lock();
-            match auth.add_user(new_username, new_password) {
-                Ok(new_uid) => {
-                    println!("[AUTH] User '{}' created with UID {}.", new_username, new_uid);
-                    
-                    // 2. Créer automatiquement son dossier Home
-                    let mut fs = crate::fs::FS.lock();
-                    
-                    // On s'assure que /home existe
-                    let _ = fs.room("home", 0); 
-                    
-                    let old_cwd = fs.cwd.clone();
-                    if fs.open("/home").is_ok() {
-                        if let Err(e) = fs.room(new_username, new_uid) {
-                            println!("[FS ERROR] Could not create home directory: {}", e);
-                        } else {
-                            println!("[FS] Home directory /home/{} created.", new_username);
-                        }
+                if new_username.is_empty() || new_password.is_empty() {
+                    println!("Usage: useradd <username> <password>");
+                } else {
+                    let mut auth = crate::auth::AUTH.lock();
+                    match auth.add_user(new_username, new_password) {
+                        Ok(new_uid) => {
+                            println!("[AUTH] User '{}' created with UID {}.", new_username, new_uid);
+                            let mut fs = crate::fs::FS.lock();
+                            let _ = fs.room("home", 0); 
+                            let old_cwd = fs.cwd.clone();
+                            if fs.open("/home").is_ok() {
+                                let _ = fs.room(new_username, new_uid);
+                            }
+                            fs.cwd = old_cwd;
+                        },
+                        Err(e) => println!("[ERROR] {}", e),
                     }
-                    fs.cwd = old_cwd;
-                },
-                Err(e) => println!("[ERROR] {}", e),
+                }
             }
-        }
-    }
-},
-
-       "userdel" => {
-    // --- VÉRIFICATION DE SÉCURITÉ ---
-    let is_admin = {
-        let auth = crate::auth::AUTH.lock();
-        auth.current_user.as_ref().map(|u| u.role == crate::auth::Role::Admin).unwrap_or(false)
-    };
-
-    if !is_admin {
-        println!("[PERMISSION DENIED] Only administrators can delete users.");
-    } else {
-        let username_to_del = args.trim();
-        if username_to_del.is_empty() {
-            println!("Usage: userdel <username>");
-        } else {
-            // 1. Supprimer du système d'authentification
-            let mut auth = crate::auth::AUTH.lock();
-            match auth.delete_user(username_to_del) {
-                Ok(_) => {
-                    println!("[AUTH] User '{}' deleted.", username_to_del);
-                    
-                    // 2. Supprimer son home directory
-                    let mut fs = crate::fs::FS.lock();
-                    let old_cwd = fs.cwd.clone();
-                    if fs.open("/home").is_ok() {
-                        if fs.remove_file(username_to_del) {
-                            println!("[FS] Home directory /home/{} removed.", username_to_del);
-                        }
-                    }
-                    fs.cwd = old_cwd;
-                },
-                Err(e) => println!("[ERROR] {}", e),
-            }
-        }
-    }
-},
+        },
 
         "logout" => {
             crate::auth::AUTH.lock().logout();
             println!("Logged out.");
-            // Note: Le loop principal du shell va nous redemander le login au prochain tour
             return; 
         },
-
-        "edit" => {
-        let mut arg_parts = args.splitn(2, ' ');
-        let file_name = arg_parts.next().unwrap_or("");
-        let new_content = arg_parts.next().unwrap_or("");
-
-    if file_name.is_empty() {
-        println!("Usage: edit <filename> <text>");
-    } else {
-        let current_uid = crate::auth::AUTH.lock().get_current_uid();
-        // On réutilise write_file qui écrase le contenu existant
-        let mut fs = crate::fs::FS.lock();
-        match fs.write_file(file_name, new_content, current_uid) {
-            Ok(_) => println!("File '{}' updated.", file_name),
-            Err(e) => println!("[ERROR] Could not edit file: {}", e),
-        }
-    }
-},
 
         "where" => {
             let fs = crate::fs::FS.lock();
@@ -356,7 +231,6 @@ pub fn interpret_command(command: &str) {
                 println!("Empty directory.");
             } else {
                 for (name, node_type) in entries {
-                    // Utilisation directe du type importé
                     match node_type {
                         NodeType::Directory => println!("{}/", name),
                         NodeType::File => println!("{}", name),
@@ -364,40 +238,33 @@ pub fn interpret_command(command: &str) {
                 }
             }
         },
+
         "open" => {
             if args.is_empty() {
                 println!("Usage: open <directory>");
-            } else {
-                if let Err(e) = crate::fs::FS.lock().open(args) {
-                    println!("Error: {}", e);
-                }
+            } else if let Err(e) = crate::fs::FS.lock().open(args) {
+                println!("Error: {}", e);
             }
         },
 
         "room" => {
             if args.is_empty() {
                 println!("Usage: room <name>");
-            } else {
-                // On passe bien 2 arguments : le nom et l'UID
-                if let Err(e) = crate::fs::FS.lock().room(args, current_uid) {
-                    println!("Error: {}", e);
-                }
+            } else if let Err(e) = crate::fs::FS.lock().room(args, current_uid) {
+                println!("Error: {}", e);
             }
         },
 
-       "note" => {
+        "note" => {
             let mut arg_parts = args.splitn(2, ' ');
             let name = arg_parts.next().unwrap_or("");
             let content = arg_parts.next().unwrap_or("");
             if name.is_empty() {
                 println!("Usage: note <filename> <content>");
+            } else if let Err(e) = crate::fs::FS.lock().write_file(name, content, current_uid) {
+                println!("Error: {}", e);
             } else {
-                // On utilise le Result et on passe l'UID
-                if let Err(e) = crate::fs::FS.lock().write_file(name, content, current_uid) {
-                    println!("Error: {}", e);
-                } else {
-                    println!("File '{}' created.", name);
-                }
+                println!("File '{}' created.", name);
             }
         },
 
@@ -410,69 +277,147 @@ pub fn interpret_command(command: &str) {
                 if fs.remove_file(filename) {
                     println!("File '{}' removed.", filename);
                 } else {
-                    println!("Error: Could not find or remove '{}'.", filename);
+                    println!("Error: Could not find '{}'.", filename);
                 }
             }
         },
+
         "read" => {
             let filename = args.trim();
-            // Attention : read_file dans le FS pro doit être mis à jour pour chercher dans le CWD
-            // Pour l'instant, on utilise la logique simplifiée
             if let Some(content) = crate::fs::FS.lock().read_file(filename) {
                 println!("{}", content);
             } else {
                 println!("Error: File '{}' not found.", filename);
             }
         },
+"run" => {
+    let auth = crate::auth::AUTH.lock();
+    let is_admin = auth.current_user.as_ref()
+        .map(|u| u.role == crate::auth::Role::Admin)
+        .unwrap_or(false);
 
-        "whoami" => {
-            println!("{}", crate::auth::AUTH.lock().get_current_username());
-        },
-
-        "clear" => vga_buffer::clear_screen(),
-
-        "stats" => {
-            let (file_count, total_bytes) = crate::fs::FS.lock().get_stats();
-            println!("Files/Folders : {}", file_count);
-            println!("Used Space    : {} bytes", total_bytes);
-        },
-      "ia" => {
-    if args.is_empty() {
-        println!("Usage: ask <votre question>");
+    if !is_admin {
+        println!("[PERMISSION DENIED] Admin only.");
     } else {
-        // 1. On informe l'utilisateur
-        println!(""); // Nouvelle ligne pour la propreté
-        print!("Interrogating JC-AI...");
+        // 1. Récupération de l'offset mémoire (sauvegardé lors de l'init_global)
+        let phys_offset = *crate::memory::PHYS_MEM_OFFSET.lock();
         
-        // 2. Envoi STRICT de la requête
-        serial_println!("AI_REQ:{}", args); 
+        if let Some(offset) = phys_offset {
+            println!("--- Preparing Ring 3 (Hierarchical Access) ---");
 
-        // 3. Lecture de la réponse (Le Kernel bloque ici jusqu'au \n)
-        let response = crate::serial::read_line();
-        
-        // 4. Nettoyage de l'affichage (on efface "Interrogating...")
-        println!("\r"); 
+            // Localisation du code et de la structure de pile alignée
+            let code_addr = VirtAddr::new(crate::user::user_test_program as *const () as u64);
+            let stack_start = VirtAddr::from_ptr(unsafe { &raw const crate::USER_STACK.data });
 
-        // 5. Logique de commande et affichage UNIQUE
-        if response.contains("[[CLEAR]]") {
-            crate::vga_buffer::clear_screen(); 
-            println!("[JC-AI]: Ecran nettoye, Andre !");
-        } else if response.is_empty() {
-            println!("[ERROR]: Pas de reponse de l'IA.");
+            println!("[DEBUG] Code address: {:#x}", code_addr);
+            println!("[DEBUG] Stack start:  {:#x}", stack_start);
+
+            let mut all_pages_ok = true;
+            unsafe {
+                // 2. On déverrouille le chemin P4 -> P1 pour l'adresse du code
+                // Déverrouiller 10 pages autour du code pour inclure .text et .rodata
+                for i in 0..10 {
+                    let page_addr = (code_addr.as_u64() / 4096) * 4096 + (i * 4096u64);
+                    if !crate::memory::force_user_access(offset, VirtAddr::new(page_addr)) {
+                        println!("[WARN] Could not unlock code page {}", i);
+                        // Don't fail completely, some pages might be unmapped
+                    }
+                }
+                
+                // 3. On déverrouille toute la pile (16 KB = 4 pages)
+                for i in 0..5 {
+                    let page_addr = stack_start + (i * 4096u64);
+                    if !crate::memory::force_user_access(offset, page_addr) {
+                        println!("[ERROR] Could not unlock stack page {}", i);
+                        all_pages_ok = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_pages_ok {
+                println!("--- Jumping to Ring 3 ---");
+                println!("[DEBUG] Function pointer: {:#x}", code_addr);
+                println!("[DEBUG] Stack pointer: {:#x}", stack_start.as_u64() + 16384);
+                
+                // Calcul du sommet de la pile (rappel : la pile descend vers le bas)
+                let stack_top = stack_start.as_u64() + 16384;
+                
+                crate::serial_println!("[SHELL] About to jump into user mode at {:#x}", code_addr);
+                
+                unsafe { 
+                    // Appel de la fonction de saut avec les sélecteurs GDT
+                    // User Code = 27 (0x1B), User Data = 35 (0x23)
+                    crate::syscalls::jump_to_user(code_addr.as_u64(), stack_top); 
+                }
+            } else {
+                println!("[ERROR] Failed to unlock all required stack pages");
+            }
         } else {
-            // Un seul println suffit !
-            println!("[JC-AI]: {}", response);
+            println!("[ERROR] Physical Memory Offset unknown! Check memory.rs.");
         }
     }
 },
-       "neofetch" => {
-    let time = crate::drivers::rtc::get_time();// On récupère l'heure corrigée (été/hiver)
-    println!("   _/_/    JC-OS v0.4 - Rust Edition");
-    println!("  _/       User : {}", crate::auth::AUTH.lock().get_current_username());
-    println!(" _/_/_/    FS   : Hierarchical RAMFS");
-    println!("           Time : {:02}:{:02}:{:02}", time.hours, time.minutes, time.seconds);
-    println!("           CPU  : x86_64 Bare Metal");
-},
+        "whoami" => println!("{}", crate::auth::AUTH.lock().get_current_username()),
+        "clear" => vga_buffer::clear_screen(),
+        "stats" => {
+            let (file_count, total_bytes) = crate::fs::FS.lock().get_stats();
+            println!("Items: {} | Usage: {} bytes", file_count, total_bytes);
+        },
+
+        "ia" => {
+            if args.is_empty() {
+                println!("Usage: ia <question>");
+            } else {
+                print!("Interrogating JC-AI...");
+                serial_println!("AI_REQ:{}", args); 
+                let response = crate::serial::read_line(); // Note: Devrait idéalement être async aussi
+                println!("\r"); 
+                if response.contains("[[CLEAR]]") {
+                    vga_buffer::clear_screen(); 
+                    println!("[JC-AI]: Ecran nettoye, Andre !");
+                } else {
+                    println!("[JC-AI]: {}", response);
+                }
+            }
+        },
+
+        "neofetch" => {
+            let time = crate::drivers::rtc::get_time();
+            println!("   _/_/    JC-OS v0.4 - Rust Edition");
+            println!("  _/       User : {}", crate::auth::AUTH.lock().get_current_username());
+            println!(" _/_/_/    CPU  : x86_64 Bare Metal");
+            println!("           Time : {:02}:{:02}:{:02}", time.hours, time.minutes, time.seconds);
+        },
+
         _ => println!("Unknown command: {}", cmd),
+    }
+}
+
+// FONCTION INDISPENSABLE POUR LE LOGIN ASYNC
+async fn read_line(target: &mut String, mask: bool) {
+    loop {
+        if let Some(key) = KEY_QUEUE.pop() {
+            match key {
+                DecodedKey::Unicode(ch) => {
+                    match ch {
+                        '\n' | '\r' => break,
+                        '\u{8}' | '\u{7f}' => {
+                            if !target.is_empty() {
+                                target.pop();
+                                vga_buffer::backspace();
+                            }
+                        }
+                        c if c >= ' ' => {
+                            target.push(c);
+                            if mask { print!("*"); } else { print!("{}", c); }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        crate::task::yield_now().await;
     }
 }
