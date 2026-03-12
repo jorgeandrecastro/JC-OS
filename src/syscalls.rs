@@ -85,8 +85,6 @@ pub fn init_gs_base() {
         // Set IA32_KERNEL_GS_BASE MSR (0xC000_0102)
         let mut kernel_gs_msr = Msr::new(0xC000_0102);
         kernel_gs_msr.write(gs_base_addr);
-        
-        crate::serial_println!("[SYSCALL] GS_BASE initialized: {:#x}", gs_base_addr);
     }
 }
 
@@ -95,19 +93,9 @@ pub fn init_gs_base() {
 pub fn make_gs_accessible_from_user() {
     unsafe {
         let gs_base_addr = VirtAddr::new(&raw const KERNEL_DATA as u64);
-        crate::serial_println!("[SYSCALL] GS_BASE address: {:#x}", gs_base_addr);
-        crate::serial_println!("[SYSCALL] KERNEL_DATA structure size: {} bytes", core::mem::size_of::<KernelData>());
         
         if let Some(phys_offset) = *crate::memory::PHYS_MEM_OFFSET.lock() {
-            crate::serial_println!("[SYSCALL] Attempting to unlock GS_BASE page...");
-            let success = crate::memory::force_user_access(phys_offset, gs_base_addr);
-            if success {
-                crate::serial_println!("[SYSCALL] ✓ GS_BASE page unlocked for user mode");
-            } else {
-                crate::serial_println!("[SYSCALL] ✗ Failed to unlock GS_BASE page!");
-            }
-        } else {
-            crate::serial_println!("[SYSCALL] ✗ PHYS_MEM_OFFSET not available!");
+            let _ = crate::memory::force_user_access(phys_offset, gs_base_addr);
         }
     }
 }
@@ -120,13 +108,9 @@ pub fn set_kernel_stack(stack_addr: u64) {
 
 #[no_mangle]
 pub extern "C" fn syscall_handler(syscall_id: u64, arg1: u64, arg2: u64) {
-    crate::serial_println!("[SYSCALL] Handler: ID={} (0x{:x}), ARG1={:#x}, ARG2={}", syscall_id, syscall_id, arg1, arg2);
-    
     match syscall_id {
         // --- SYS_EXIT ---
         0 => { 
-            crate::serial_println!("[SYSCALL] SYS_EXIT (code={})", arg1);
-            crate::serial_println!("[SYSTEM] User program exited with code {}", arg1);
             loop { x86_64::instructions::hlt(); }
         },
 
@@ -138,23 +122,15 @@ pub extern "C" fn syscall_handler(syscall_id: u64, arg1: u64, arg2: u64) {
             if len > 0 && len <= 1024 {
                 let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
                 if let Ok(s) = core::str::from_utf8(slice) {
-                    // 1. Debug sur le port série
-                    crate::serial_println!("[RING 3] {}", s);
-                    
-                    // 2. Affichage physique sur l'écran (QEMU)
                     use crate::vga_buffer::WRITER;
                     let mut writer = WRITER.lock();
                     writer.write_string(s);
                     writer.write_string("\n"); 
-                } else {
-                    crate::serial_println!("[SYSCALL] Invalid UTF-8 string");
                 }
-            } else {
-                crate::serial_println!("[SYSCALL] Invalid string length: {}", len);
             }
         },
 
-        _ => crate::serial_println!("[WARN] Unknown syscall ID: {} (0x{:x})", syscall_id, syscall_id),
+        _ => {},
     }
 }
 

@@ -40,7 +40,6 @@ pub fn read_byte() -> u8 {
     SERIAL1.lock().receive() // .receive() attend déjà que la donnée soit prête
 }
 
-/// Lit une ligne complète
 /// Lit une ligne complète en ignorant les caractères de contrôle initiaux
 pub fn read_line() -> alloc::string::String {
     let mut s = alloc::string::String::new();
